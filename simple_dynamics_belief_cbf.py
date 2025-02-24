@@ -1,18 +1,16 @@
+import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 import numpy as np
+from jax import grad, jit
+from jaxopt import BoxOSQP as OSQP
+from tqdm import tqdm
 
-# from cbfs import vanilla_cbf_circle as cbf
 from cbfs import BeliefCBF
 from cbfs import vanilla_clf_x as clf
 from dynamics import SimpleDynamics
 from estimators import NonlinearEstimator as EKF
-from jax import grad, jit
-
-# from osqp import OSQP
-from jaxopt import BoxOSQP as OSQP
 from sensor import noisy_sensor as sensor
-from tqdm import tqdm
 
 # Define simulation parameters
 dt = 0.01  # Time step
@@ -20,11 +18,12 @@ T = 1000 # Number of steps
 u_max = 5.0
 
 # Obstacle
-wall_x = 3.0
+wall_x = 2.0
+goal_x = 10.0
 
 # Initial state (truth)
 x_true = jnp.array([0.0, 5.0])  # Start position
-goal = jnp.array([6.0, 5.0])  # Goal position
+goal = jnp.array([goal_x, 5.0])  # Goal position
 obstacle = jnp.array([wall_x, 0.0])  # Wall
 safe_radius = 0.0  # Safety radius around the obstacle
 
@@ -38,11 +37,18 @@ beta = jnp.array([-wall_x])  # Example vector
 delta = 0.5  # Probability threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
+# Control params
+clf_gain = 0.1  # CLF linear gain
+clf_slack = 10.0 # CLF slack
+cbf_gain = 20.0  # CBF linear gain
+
 # Autodiff: Compute Gradients for CLF and CBF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
 
 # OSQP solver instance
 solver = OSQP()
+
+print(jax.default_backend())
 
 @jit
 def solve_qp(b):
@@ -55,7 +61,7 @@ def solve_qp(b):
 
     L_f_V = jnp.dot(grad_V_x.T, dynamics.f(x_estimated))
     L_g_V = jnp.dot(grad_V_x.T, dynamics.g(x_estimated))
-    gamma = 0.1  # CLF gain
+    
 
     # Compute CBF components
     h_b = cbf.h_b(b)
@@ -64,7 +70,7 @@ def solve_qp(b):
     L_f_hb = L_f_hb.reshape(1, 1) # reshape to match L_f_V
     L_g_hb = L_g_hb.reshape(1, 2) # reshape to match L_g_V
 
-    cbf_gain = 20.0  # CBF gain
+    
 
     # Define QP matrices
     Q = jnp.eye(2)  # Minimize ||u||^2
@@ -77,7 +83,7 @@ def solve_qp(b):
     ])
 
     u = jnp.hstack([
-        (-L_f_V - gamma * V).squeeze(),   # CLF constraint
+        (-L_f_V - clf_gain * V + clf_slack).squeeze(),   # CLF constraint
         (L_f_hb.squeeze() + cbf_gain * h_b).squeeze(),     # CBF constraint
         jnp.inf,
         u_max 
