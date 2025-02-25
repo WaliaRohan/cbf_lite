@@ -35,15 +35,15 @@ class NonlinearSingleIntegrator:
     def f(self, x):
         """Nonlinear drift dynamics: f(x)"""
         return jnp.array([
-            jnp.sin(x[0]),
-            jnp.cos(x[1])
+            jnp.sin(x[0]).squeeze(),
+            jnp.cos(x[1]).squeeze()
         ])
     
     def g(self, x):
         """State-dependent control matrix: g(x)"""
         return jnp.array([
-            [1 + 0.1 * jnp.sin(x[0]), 0],
-            [0, 1 + 0.1 * jnp.cos(x[1])]
+            [1 + 0.1 * jnp.sin(x[0]).squeeze(), 0],
+            [0, 1 + 0.1 * jnp.cos(x[1]).squeeze()]
         ])
     
     def x_dot(self, x, u):
