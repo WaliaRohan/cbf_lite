@@ -67,20 +67,55 @@ class BeliefCBF:
         # Compute gradient automatically - nx1 matrix containing partials of h_b wrt all n elements in b
         grad_h_b = jax.grad(self.h_b, argnums=0)
 
-        def f_sigma(b):
-            return None # Replace this to accomodate AP + PA.T + Q
-
-        def g_sigma(b):
-            return jnp.zeros(b.shape[0] - self.n) # Replace this to be the extracted portion of jacobian that is affine in u
-
-        # Only wrt mean right now, as g_sigma is zero for our case
         def f_b(b):
-            return grad_h_b(b)[:self.n] @ dynamics.f(b[:self.n].reshape(-1, 1))  # Change this to accomodate all elements in h_b
+            # Time update evaluated at mean
+            f_vector = dynamics.f(b[:self.n]) 
 
+            # Covariance update evaluated at mean
+            A_f = jax.jacfwd(dynamics.f)(b[:self.n])
+            f_sigma = A_f@sigma + sigma@(A_f.T) + dynamics.Q
+            upper_triangular_indices = jnp.triu_indices(f_sigma.shape[0])
+            f_sigma_vector = f_sigma[upper_triangular_indices]
+            
+            # "f" portion of belief vector
+            f_b_vector = jnp.hstack([f_vector, f_sigma_vector])
+            
+            return f_b_vector
+        
         def g_b(b):
-            return grad_h_b(b)[:self.n] @ dynamics.g(b[:self.n].reshape(-1, 1))  # Change this to accomodate all elements in h_b
 
-        return f_b(b), g_b(b)
+            def extract_g_sigma(G_sigma):
+                """Extract g_sigma by vectorizing the upper triangular part of each (n x n) slice in G_sigma."""
+                n, m, _ = G_sigma.shape  # G_sigma is (n, m, n)
+                
+                # Create indices for the upper triangular part
+                tri_indices = jnp.triu_indices(n)
+
+                # Extract upper triangular elements from each m-th slice
+                g_sigma = jnp.array([G_sigma[:, j][tri_indices] for j in range(m)]).T  # Shape (k, m)
+                
+                return g_sigma
+
+            # Control influence on mean
+            g_matrix = dynamics.g(b[:self.n])
+            
+            # Covariance update term
+            A_g = jax.jacfwd(dynamics.g)(b[:self.n])
+            g_sigma = A_g @ sigma + sigma @ (A_g.T) # No Q -> accounted for in f
+            g_sigma_vector = extract_g_sigma(g_sigma)
+
+            # "g" portion of belief vector
+            g_b_matrix = jnp.vstack([g_matrix, g_sigma_vector])
+
+            return g_b_matrix
+
+        def L_f_h(b):
+            return grad_h_b(b)@f_b(b)
+        
+        def L_g_h(b):
+            return grad_h_b(b)@g_b(b)
+        
+        return L_f_h(b), L_g_h(b) 
 
         
 
