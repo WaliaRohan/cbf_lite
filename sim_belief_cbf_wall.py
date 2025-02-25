@@ -8,14 +8,14 @@ from tqdm import tqdm
 
 from cbfs import BeliefCBF
 from cbfs import vanilla_clf_x as clf
-from dynamics import SimpleDynamics
-from estimators import NonlinearEstimator as EKF
+from dynamics import NonlinearSingleIntegrator, SimpleDynamics
+from estimators import EKF
 from sensor import noisy_sensor as sensor
 
 # Define simulation parameters
-dt = 0.01  # Time step
-T = 1000 # Number of steps
-u_max = 5.0
+dt = 0.001  # Time step
+T = 10000 # Number of steps
+u_max = 1.0
 
 # Obstacle
 wall_x = 2.0
@@ -27,7 +27,7 @@ goal = jnp.array([goal_x, 5.0])  # Goal position
 obstacle = jnp.array([wall_x, 0.0])  # Wall
 safe_radius = 0.0  # Safety radius around the obstacle
 
-dynamics = SimpleDynamics()
+dynamics = NonlinearSingleIntegrator() # SimpleDynamics()
 estimator = EKF(dynamics, sensor, dt, x_init=x_true)
 
 # Define belief CBF parameters
@@ -68,9 +68,7 @@ def solve_qp(b):
     L_f_hb, L_g_hb = cbf.h_dot_b(b, dynamics)
 
     L_f_hb = L_f_hb.reshape(1, 1) # reshape to match L_f_V
-    L_g_hb = L_g_hb.reshape(1, 2) # reshape to match L_g_V
-
-    
+    L_g_hb = L_g_hb.reshape(1, 2) # reshape to match L_g_V   
 
     # Define QP matrices
     Q = jnp.eye(2)  # Minimize ||u||^2
