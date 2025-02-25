@@ -9,26 +9,26 @@ from tqdm import tqdm
 from cbfs import BeliefCBF
 from cbfs import vanilla_clf_x as clf
 from dynamics import NonlinearSingleIntegrator, SimpleDynamics
-from estimators import EKF
-from sensor import noisy_sensor as sensor
+from estimators import GEKF
+from sensor import noisy_sensor_mult as sensor
 
 # Define simulation parameters
-dt = 0.001  # Time step
-T = 10000 # Number of steps
+dt = 0.0001  # Time step
+T = 1000 # Number of steps
 u_max = 1.0
 
 # Obstacle
-wall_x = 2.0
-goal_x = 10.0
+wall_x = 7.0
+goal_x = 17.0
 
 # Initial state (truth)
-x_true = jnp.array([0.0, 5.0])  # Start position
+x_true = jnp.array([5.0, 2.5])  # Start position
 goal = jnp.array([goal_x, 5.0])  # Goal position
 obstacle = jnp.array([wall_x, 0.0])  # Wall
 safe_radius = 0.0  # Safety radius around the obstacle
 
 dynamics = NonlinearSingleIntegrator() # SimpleDynamics()
-estimator = EKF(dynamics, sensor, dt, x_init=x_true)
+estimator = GEKF(dynamics, sensor, dt, x_init=x_true)
 
 # Define belief CBF parameters
 n = 2
@@ -119,7 +119,7 @@ def get_b_vector(mu, sigma):
     return b
 
 # Simulation loop
-for _ in tqdm(range(T), desc="Simulation Progress"):
+for t in tqdm(range(T), desc="Simulation Progress"):
 
     belief = get_b_vector(x_estimated, p_estimated)
 
@@ -135,11 +135,11 @@ for _ in tqdm(range(T), desc="Simulation Progress"):
     x_true = x_true + dt * (dynamics.f(x_true) + dynamics.g(x_true) @ u_opt)
 
     # obtain current measurement
-    x_measured =  sensor(x_true)
+    x_measured =  sensor(x_true, t)
 
     # updated estimate 
     estimator.predict(u_opt)
-    estimator.update(x_measured)
+    estimator.update(x_measured, t)
     x_estimated, p_estimated = estimator.get_belief()
 
     # Store for plotting
@@ -147,7 +147,7 @@ for _ in tqdm(range(T), desc="Simulation Progress"):
     u_traj.append(u_opt)
     x_meas.append(x_measured)
     x_est.append(x_estimated)
-    # print(x_true)
+    # print(t, x_true, x_measured)
 
 # Convert to JAX arrays
 x_traj = jnp.array(x_traj)
