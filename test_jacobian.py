@@ -1,4 +1,5 @@
 import sympy as sp
+
 from dynamics import SimpleDynamics
 
 case = "Dubins" # "Simple", "Dubins"
@@ -30,17 +31,26 @@ elif case == "Dubins":
                 0,                   # theta_dot (no drift)
                 0                    # v_dot (velocity is constant)
             ])
-
+    # g_matrix = sp.Matrix([
+    #             0,  # No control influence on x
+    #             0,  # No control influence on y
+    #             0,  # Control directly affects theta (heading)
+    #             1   # No control influence on velocity
+    #         ])
     g_matrix = sp.Matrix([
                 0,  # No control influence on x
-                0,  # No control influence on y
+                theta,  
                 0,  # Control directly affects theta (heading)
-                1   # No control influence on velocity
+                x   
             ])
     
     x_dot = f_matrix + g_matrix*u
 
 # Print results
+print("x_dot")
+
+sp.pprint(x_dot)
+
 J_x = x_dot.jacobian(x_vector)
 
 print("Jacobian of x_dot with respect to x: ")
