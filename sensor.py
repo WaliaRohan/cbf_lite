@@ -59,13 +59,16 @@ def noisy_sensor_mult(x, t, key=None):
     chol_v = get_chol(sigma_v, dim)
 
     u_vector = 1 + mu_u + jnp.mean(jnp.dot(chol_u, normal_samples.T), axis=1)
-    v_vector = mu_v + jnp.mean(jnp.dot(chol_v, normal_samples.T), axis=1)
+    v_vector = mu_v + jnp.mean(jnp.dot(chol_v, normal_samples_2.T), axis=1)
 
-    new_x = x + v_vector # add biased gaussian noise
+    # new_x stores sensor measurement
+    new_x = x
 
     # Add multiplicative noise to second state
     state_idx = 1
     if not jnp.isnan(jnp.mean(u_vector)):
         new_x = x.at[state_idx].set(x[state_idx]*jnp.mean(u_vector))
+
+    new_x = new_x + v_vector # add biased gaussian noise
 
     return new_x
