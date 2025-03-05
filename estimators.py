@@ -4,7 +4,7 @@ import jax.scipy.linalg as linalg
 
 
 class EKF:
-    """Extended Kalman Filter (EKF) for state estimation with internal belief tracking."""
+    """Discrete EKF"""
     
     def __init__(self, dynamics, sensor_model, dt, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
@@ -27,13 +27,14 @@ class EKF:
         # Compute Jacobian of dynamics (linearization)
         F_x = jax.jacobian(lambda x: x + self.dt * (self.dynamics.f(x) + self.dynamics.g(x) @ u))(self.x_hat)
 
-        # Update covariance
+        # Discrete covariance update
         self.P = F_x @ self.P @ F_x.T + self.Q
 
     def update(self, z):
         """Measurement update step of EKF."""
         H_x = jnp.eye(2)  # Jacobian of measurement model (assuming direct state observation)
-        y = z - self.sensor_model(self.x_hat)  # Innovation (difference between measured and predicted state)
+        # y = z - self.sensor_model(self.x_hat)  # Innovation (difference between measured and predicted state)
+        y = z - self.x_hat # self.x_hat combes from identity observation model
 
         # Kalman gain
         S = H_x @ self.P @ H_x.T + self.R
@@ -51,7 +52,7 @@ class EKF:
 
 
 class GEKF:
-    """Extended Kalman Filter (EKF) for state estimation with internal belief tracking."""
+    """Continuous-Discrete GEKF"""
     
     def __init__(self, dynamics, sensor_model, dt, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
@@ -71,11 +72,17 @@ class GEKF:
         # Nonlinear state propagation
         self.x_hat = self.x_hat + self.dt * (self.dynamics.f(self.x_hat) + self.dynamics.g(self.x_hat) @ u)
 
-        # Compute Jacobian of dynamics (linearization)
-        F_x = jax.jacobian(lambda x: x + self.dt * (self.dynamics.f(x) + self.dynamics.g(x) @ u))(self.x_hat)
+        # Jacobian of noise-free model evaluate at current mean (self.x_hat)
+        A_f = jax.jacobian(self.dynamics.f)(self.x_hat)
+        A_g = jax.jacobian(self.dynamics.g)(self.x_hat)
+        F = A_f + jnp.einsum("ijk,j->ik", A_g, u)
 
-        # Update covariance
-        self.P = F_x @ self.P @ F_x.T + self.Q
+        # # Compute Jacobian of dynamics (linearization)
+        # F_x = jax.jacobian(lambda x: x + self.dt * (self.dynamics.f(x) + self.dynamics.g(x) @ u))(self.x_hat)
+
+        # Continous covariance udpate
+        P_dot = F @ self.P + self.P@ F + self.Q
+        self.P = self.P + P_dot*self.dt
 
     def update(self, z, t):
         """Measurement update step of EKF."""
@@ -93,7 +100,8 @@ class GEKF:
         # H_dot_fn = jax.jacfwd(self.sensor_model, argnums=0)  # Jacobian of measurement model (assuming direct state observation), Differentiate w.r.t x
         # H_dot = H_dot_fn(self.x_hat, t)
       
-        h_z = self.x_hat
+        # Perfect state observation
+        h_z = z
         H_dot = jnp.eye(len(z))
 
         h_z = h_z.at[1].set(h_z[1] * (1 + mu_u))
