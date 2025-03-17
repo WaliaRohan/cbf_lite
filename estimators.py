@@ -1,6 +1,11 @@
+import os
+
 import jax
 import jax.numpy as jnp
 import jax.scipy.linalg as linalg
+import pandas as pd
+from jax import jit
+from openpyxl import load_workbook
 
 
 class EKF:
@@ -10,14 +15,16 @@ class EKF:
         self.dynamics = dynamics  # System dynamics model
         self.sensor_model = sensor_model  # Sensor model
         self.dt = dt  # Time step
+        self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim))
+        self.name = "EKF"
 
         # Initialize belief (state estimate)
-        self.x_hat = x_init if x_init is not None else jnp.zeros(2)
+        self.x_hat = x_init if x_init is not None else jnp.zeros(dynamics.state_dim)
 
         # Covariance initialization
-        self.P = P_init if P_init is not None else jnp.eye(2) * 0.1  
+        self.P = P_init if P_init is not None else jnp.eye(dynamics.state_dim) * 0.1  
         self.Q = dynamics.Q # Process noise covariance
-        self.R = R if R is not None else jnp.eye(2) * 0.05  # Measurement noise covariance
+        self.R = R if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
 
     def predict(self, u):
         """Predict step of EKF."""
@@ -32,24 +39,23 @@ class EKF:
 
     def update(self, z):
         """Measurement update step of EKF."""
-        H_x = jnp.eye(2)  # Jacobian of measurement model (assuming direct state observation)
+        H_x = jnp.eye(len(z))  # Jacobian of measurement model (assuming direct state observation)
         # y = z - self.sensor_model(self.x_hat)  # Innovation (difference between measured and predicted state)
-        y = z - self.x_hat # self.x_hat combes from identity observation model
+        y = z - self.x_hat # Innovation term: note self.x_hat comes from identity observation model
 
         # Kalman gain
         S = H_x @ self.P @ H_x.T + self.R
-        K = self.P @ H_x.T @ linalg.inv(S)
+        self.K = self.P @ H_x.T @ linalg.inv(S)
 
         # Update state estimate
-        self.x_hat = self.x_hat + K @ y
+        self.x_hat = self.x_hat + self.K @ y
 
         # Update covariance
-        self.P = (jnp.eye(2) - K @ H_x) @ self.P
+        self.P = (jnp.eye(len(z)) - self.K @ H_x) @ self.P
 
     def get_belief(self):
         """Return the current belief (state estimate)."""
         return self.x_hat, self.P
-
 
 class GEKF:
     """Continuous-Discrete GEKF"""
@@ -58,35 +64,43 @@ class GEKF:
         self.dynamics = dynamics  # System dynamics model
         self.sensor_model = sensor_model  # Sensor model
         self.dt = dt  # Time step
+        self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim))
+        self.name = "GEKF"
 
         # Initialize belief (state estimate)
-        self.x_hat = x_init if x_init is not None else jnp.zeros(2)
+        self.x_hat = x_init if x_init is not None else jnp.zeros(dynamics.state_dim)
 
         # Covariance initialization
-        self.P = P_init if P_init is not None else jnp.eye(2) * 0.1  
+        self.P = P_init if P_init is not None else jnp.eye(dynamics.state_dim) * 0.1  
         self.Q = dynamics.Q # Process noise covariance
-        self.R = R if R is not None else jnp.eye(2) * 0.05  # Measurement noise covariance
+        self.R = R if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
 
     def predict(self, u):
         """Predict step of EKF."""
         # Nonlinear state propagation
         self.x_hat = self.x_hat + self.dt * (self.dynamics.f(self.x_hat) + self.dynamics.g(self.x_hat) @ u)
 
-        # Jacobian of noise-free model evaluate at current mean (self.x_hat)
-        A_f = jax.jacobian(self.dynamics.f)(self.x_hat)
-        A_g = jax.jacobian(self.dynamics.g)(self.x_hat)
-        F = A_f + jnp.einsum("ijk,j->ik", A_g, u)
+        # # Jacobian of noise-free model evaluate at current mean (self.x_hat)
+        # A_f = jax.jacobian(self.dynamics.f)(self.x_hat)
+        # A_g = jax.jacobian(self.dynamics.g)(self.x_hat)
+
+        # if A_g.shape == (1, 1):
+        #     F = A_f + A_g@u
+        # else:
+        #     F = A_f + jnp.einsum("ijk,j->ik", A_g, u)
 
         # # Compute Jacobian of dynamics (linearization)
-        # F_x = jax.jacobian(lambda x: x + self.dt * (self.dynamics.f(x) + self.dynamics.g(x) @ u))(self.x_hat)
+        F = jax.jacobian(lambda x: self.dynamics.f(x) + self.dynamics.g(x) @ u)(self.x_hat)
 
         # Continous covariance udpate
-        P_dot = F @ self.P + self.P@ F + self.Q
+        P_dot = F @ self.P + self.P@ (F.T) + self.Q
         self.P = self.P + P_dot*self.dt
 
-    def update(self, z, t):
+    def update(self, z):
         """Measurement update step of EKF."""
         """z: measurement"""
+
+        mult_state = 0
         
         # Multiplicative noise
         mu_u = 0.0174
@@ -97,33 +111,70 @@ class GEKF:
         sigma_v = 7.997e-5
         
         # h_z = self.sensor_model(self.x_hat, t) # replace with h_z = h(z) for more complex models
-        # H_dot_fn = jax.jacfwd(self.sensor_model, argnums=0)  # Jacobian of measurement model (assuming direct state observation), Differentiate w.r.t x
-        # H_dot = H_dot_fn(self.x_hat, t)
+        # dhdx_fn = jax.jacfwd(self.sensor_model, argnums=0)  # Jacobian of measurement model (assuming direct state observation), Differentiate w.r.t x
+        # dhdx = dhdx_fn(self.x_hat, t)
       
         # Perfect state observation
-        h_z = z
-        H_dot = jnp.eye(len(z))
+        h_z = self.x_hat
+        dhdx = jnp.eye(len(self.x_hat)) # change name of this variable
 
-        h_z = h_z.at[1].set(h_z[1] * (1 + mu_u))
+        h_z = h_z.at[mult_state].set(h_z[mult_state] * (1 + mu_u))
         E = h_z + mu_v
 
-        C = jnp.matmul(self.P, jnp.transpose(H_dot, axes=None))  # Perform the matrix multiplication
-        C = C.at[1].set((1 + mu_u) * C[1])  # Modify only the second element
+        C = jnp.matmul(self.P, jnp.transpose(dhdx, axes=None))  # Perform the matrix multiplication
+        C = C.at[mult_state].set((1 + mu_u) * C[mult_state])  # Modify only the specified state
         
-        M = jnp.diag(jnp.diag(jnp.matmul(H_dot, jnp.matmul(self.P, jnp.transpose(H_dot))) + jnp.matmul(h_z, jnp.transpose(h_z))))
+        M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
         
-        S = jnp.matmul(H_dot, jnp.matmul(self.P, jnp.transpose(H_dot, axes=None)))  # Perform matrix multiplication
-        S = S.at[1].set(jnp.square(1 + mu_u) * S[1])  # Apply (1 + mu_u)^2 to the second element only
+        S = jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx, axes=None)))  # Perform matrix multiplication
+        S = S.at[mult_state].set(jnp.square(1 + mu_u) * S[mult_state])  # Apply (1 + mu_u)^2 to the specified state
         M = M.at[1, 1].set(jnp.square(sigma_u) * M[1, 1])
         S = S + M + jnp.square(sigma_v)
 
-        K = jnp.matmul(C, jnp.linalg.inv(S))
+        self.K = jnp.matmul(C, jnp.linalg.inv(S))
 
         # Update state estimate
-        self.x_hat = self.x_hat + jnp.matmul(K, z - E)
+        self.x_hat = self.x_hat + jnp.matmul(self.K, z - E)
 
         # Update covariance
-        self.P = self.P - jnp.matmul(K, jnp.transpose(C, axes=None))
+        self.P = self.P - jnp.matmul(self.K, jnp.transpose(C, axes=None))
+
+    def update_1D(self, z):
+        """Measurement update step of EKF."""
+        """z: measurement"""
+
+        mult_state = 0
+        
+        # Multiplicative noise
+        mu_u = 0.0174
+        sigma_u = 10*2.916e-4 # 10 times more than what was shown in GEKF paper
+
+        # Additive noise
+        mu_v = -0.0386
+        sigma_v = 7.997e-5
+        
+        # Perfect state observation
+        h_z = self.x_hat
+        dhdx = jnp.eye(len(self.x_hat))
+
+        h_z = (1+mu_u)*h_z
+        E = h_z + mu_v
+
+        C = (1+mu_u)*jnp.matmul(self.P, jnp.transpose(dhdx, axes=None))  # Perform the matrix multiplication
+     
+        M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
+        
+        S = jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx, axes=None)))  # Perform matrix multiplication
+        S = jnp.square(1 + mu_u)*S + jnp.square(sigma_u)*M + jnp.square(sigma_v)*jnp.eye(self.dynamics.state_dim)
+
+        self.K = jnp.matmul(C, jnp.linalg.inv(S))
+
+        # Update state estimate
+        self.x_hat = self.x_hat + jnp.matmul(self.K, z - E)
+
+        # Update covariance
+        self.P = self.P - jnp.matmul(self.K, jnp.transpose(C, axes=None))
+
 
     def get_belief(self):
         """Return the current belief (state estimate)."""

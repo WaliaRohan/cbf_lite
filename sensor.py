@@ -65,9 +65,9 @@ def noisy_sensor_mult(x, t, key=None):
     new_x = x
 
     # Add multiplicative noise to second state
-    state_idx = 1
+    mult_state = 0
     if not jnp.isnan(jnp.mean(u_vector)):
-        new_x = x.at[state_idx].set(x[state_idx]*jnp.mean(u_vector))
+        new_x = x.at[mult_state].set(x[mult_state]*jnp.mean(u_vector))
 
     new_x = new_x + v_vector # add biased gaussian noise
 
