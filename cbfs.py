@@ -86,8 +86,11 @@ class BeliefCBF:
 
             def extract_g_sigma(G_sigma):
                 """Extract g_sigma by vectorizing the upper triangular part of each (n x n) slice in G_sigma."""
-                n, m, _ = G_sigma.shape  # G_sigma is (n, m, n)
-                
+                shape = G_sigma.shape  # G_sigma is (n, m, n)
+                n = shape[0]
+                m = shape[1]
+
+
                 # Create indices for the upper triangular part
                 tri_indices = jnp.triu_indices(n)
 
@@ -101,6 +104,7 @@ class BeliefCBF:
             
             # Covariance update term
             A_g = jax.jacfwd(dynamics.g)(b[:self.n])
+            # A_g = A_g.transpose(0, 2, 1) # nxnxm -> Remove if this is giving incorrect results (belief cbf was working for 2d dynamics before this was added for 4x1 dubins)
             g_sigma = A_g @ sigma + sigma @ (A_g.T) # No Q -> accounted for in f
             g_sigma_vector = extract_g_sigma(g_sigma)
 
