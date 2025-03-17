@@ -8,7 +8,7 @@ class SingleIntegrator1D:
         self.state_dim = 1
         self.a = a  # Drift coefficient
         self.f_matrix = jnp.array([a])  # Linear drift term
-        self.g_matrix = jnp.array([1.0])  # Control directly influences state
+        self.g_matrix = jnp.array([[1.0]])  # Control directly influences state
         if Q is None:
             self.Q = jnp.eye(1) * 0  # Default to zero process noise
         else:
