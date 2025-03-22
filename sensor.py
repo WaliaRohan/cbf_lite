@@ -25,13 +25,19 @@ def get_chol(sigma, dim):
     return chol
 
 def noisy_sensor_mult(x, t, key=None):
-    # Multiplicative noise
-    mu_u = 0.0174
-    sigma_u = 10*2.916e-4 # 10 times more than what was shown in GEKF paper
+    # # Multiplicative noise
+    # mu_u = 0.0174
+    # sigma_u = jnp.sqrt(2.916e-4) # 10 times more than what was shown in GEKF paper
 
-    # Additive noise
-    mu_v = -0.0386
-    sigma_v = 7.997e-5
+    # # Additive noise
+    # mu_v = -0.0386
+    # sigma_v = jnp.sqrt(7.97e-5)
+
+    mu_u = 0.1
+    sigma_u = jnp.sqrt(0.001)
+
+    mu_v = 0.01
+    sigma_v = jnp.sqrt(0.0001)
 
     if key is None:
         key = random.PRNGKey(0)

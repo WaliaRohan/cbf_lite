@@ -4,11 +4,12 @@ import jax.numpy as jnp
 class SingleIntegrator1D:
     """1D Single Integrator Dynamics with Drift: dx/dt = a * x + u"""
     
-    def __init__(self, a=0.1, Q=None):
+    def __init__(self, a=0.1, b=1.0, Q=None):
         self.state_dim = 1
+        self.name="Single Integrator 1D"
         self.a = a  # Drift coefficient
         self.f_matrix = jnp.array([a])  # Linear drift term
-        self.g_matrix = jnp.array([[1.0]])  # Control directly influences state
+        self.g_matrix = jnp.array([[b]])  # Control directly influences state
         if Q is None:
             self.Q = jnp.eye(1) * 0  # Default to zero process noise
         else:
@@ -19,11 +20,10 @@ class SingleIntegrator1D:
         return self.f_matrix * x  # Linear drift
 
     def g(self, x):
-        """Control matrix: g(x)"""
         return self.g_matrix  # Constant control influence
     
     def x_dot(self, x, u):
-        return self.f_matrix * x + self.g_matrix * u
+        return self.f_matrix * x + self.g_matrix @ u
 
 class SimpleDynamics:
     """Simple system dynamics: dx/dt = f(x) + g(x) u"""

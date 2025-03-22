@@ -39,7 +39,7 @@ class EKF:
 
     def update(self, z):
         """Measurement update step of EKF."""
-        H_x = jnp.eye(len(z))  # Jacobian of measurement model (assuming direct state observation)
+        H_x = jnp.eye(len(self.x_hat))  # Jacobian of measurement model (assuming direct state observation)
         # y = z - self.sensor_model(self.x_hat)  # Innovation (difference between measured and predicted state)
         y = z - self.x_hat # Innovation term: note self.x_hat comes from identity observation model
 
@@ -80,16 +80,7 @@ class GEKF:
         # Nonlinear state propagation
         self.x_hat = self.x_hat + self.dt * (self.dynamics.f(self.x_hat) + self.dynamics.g(self.x_hat) @ u)
 
-        # # Jacobian of noise-free model evaluate at current mean (self.x_hat)
-        # A_f = jax.jacobian(self.dynamics.f)(self.x_hat)
-        # A_g = jax.jacobian(self.dynamics.g)(self.x_hat)
-
-        # if A_g.shape == (1, 1):
-        #     F = A_f + A_g@u
-        # else:
-        #     F = A_f + jnp.einsum("ijk,j->ik", A_g, u)
-
-        # # Compute Jacobian of dynamics (linearization)
+        # Compute Jacobian of dynamics (linearization)
         F = jax.jacobian(lambda x: self.dynamics.f(x) + self.dynamics.g(x) @ u)(self.x_hat)
 
         # Continous covariance udpate
@@ -104,11 +95,11 @@ class GEKF:
         
         # Multiplicative noise
         mu_u = 0.0174
-        sigma_u = 10*2.916e-4 # 10 times more than what was shown in GEKF paper
+        sigma_u = jnp.sqrt(2.916e-4) # 10 times more than what was shown in GEKF paper
 
         # Additive noise
         mu_v = -0.0386
-        sigma_v = 7.997e-5
+        sigma_v = jnp.sqrt(7.97e-5)
         
         # h_z = self.sensor_model(self.x_hat, t) # replace with h_z = h(z) for more complex models
         # dhdx_fn = jax.jacfwd(self.sensor_model, argnums=0)  # Jacobian of measurement model (assuming direct state observation), Differentiate w.r.t x
@@ -145,13 +136,18 @@ class GEKF:
 
         mult_state = 0
         
-        # Multiplicative noise
-        mu_u = 0.0174
-        sigma_u = 10*2.916e-4 # 10 times more than what was shown in GEKF paper
+        # mu_u = 0.0174
+        # sigma_u = jnp.sqrt(2.916e-4) # 10 times more than what was shown in GEKF paper
 
-        # Additive noise
-        mu_v = -0.0386
-        sigma_v = 7.997e-5
+        # # Additive noise
+        # mu_v = -0.0386
+        # sigma_v = jnp.sqrt(7.97e-5)
+
+        mu_u = 0.1
+        sigma_u = jnp.sqrt(0.001)
+
+        mu_v = 0.01
+        sigma_v = jnp.sqrt(0.0001)
         
         # Perfect state observation
         h_z = self.x_hat

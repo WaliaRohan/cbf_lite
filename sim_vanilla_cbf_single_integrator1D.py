@@ -28,7 +28,9 @@ obstacle = jnp.array([wall_x])  # Wall
 safe_radius = 0.0  # Safety radius around the obstacle
 
 dynamics = SingleIntegrator1D() 
-estimator = GEKF(dynamics, sensor, dt, x_init=x_true, R=7.997e-5*jnp.eye(dynamics.state_dim))
+
+x_initial_measurement = sensor(x_true, 0)
+estimator = EKF(dynamics, sensor, dt, x_init=x_initial_measurement, R=jnp.sqrt(0.0001)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -135,9 +137,13 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # obtain current measurement
     x_measured =  sensor(x_true, t)
 
-    # updated estimate 
-    estimator.predict(u_opt)
-    estimator.update_1D(x_measured)
+    # update measurement every 10 iteration steps
+    if t > 0 and t%2 == 0:
+        if estimator.name == "GEKF":
+            estimator.update_1D(x_measured)
+
+        if estimator.name == "EKF":
+            estimator.update(x_measured)
     x_estimated, p_estimated = estimator.get_belief()
 
     # Store for plotting
@@ -147,8 +153,6 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     x_est.append(x_estimated)
     kalman_gains.append(estimator.K)
     covariances.append(p_estimated)
-    # print(t, x_true, x_measured)
-    print(estimator.K)
 
 # Convert to JAX arrays
 x_traj = jnp.array(x_traj)
@@ -178,7 +182,7 @@ plt.show()
 # Second figure: X component comparison
 plt.figure(figsize=(6, 4))
 plt.plot(x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2)
-plt.plot(x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=4)
+plt.plot(x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=6)
 plt.plot(x_traj[:, 0], color="blue", label="True x")
 plt.xlabel("Time step")
 plt.ylabel("X")
