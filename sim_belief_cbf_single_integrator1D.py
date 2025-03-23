@@ -20,7 +20,7 @@ u_max = 1.0
 # Obstacle
 wall_x = 7.0
 goal_x = 10.0
-x_init = 5.0
+x_init = 6.8
 
 # Initial state (truth)
 x_true = jnp.array([x_init])  # Start position
@@ -56,9 +56,9 @@ delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
-clf_gain = 0.1  # CLF linear gain
-clf_slack = 10.0 # CLF slack
-cbf_gain = 20.0  # CBF linear gain
+clf_gain = 10.0  # CLF linear gain
+clf_slack_penalty = 1000 
+cbf_gain = 10.0  # CBF linear gain
 
 # Autodiff: Compute Gradients for CLF and CBF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -68,7 +68,7 @@ solver = OSQP()
 
 print(jax.default_backend())
 
-@jit
+# @jit
 def solve_qp(b):
     x_estimated, sigma = cbf.extract_mu_sigma(b)
 
@@ -88,30 +88,44 @@ def solve_qp(b):
     L_g_h = L_g_hb
 
     # Define QP matrices
-    Q = jnp.eye(dynamics.state_dim)  # Minimize ||u||^2
-    c = jnp.zeros(dynamics.state_dim)  # No linear cost term
+    Q = jnp.array([
+        [1, 0],
+        [0, 2*clf_slack_penalty]
+    ])
+    
+      # Minimize ||u||^2 and slack
+    c = jnp.zeros(2)  # No linear cost term
 
-    A = jnp.vstack([
-        L_g_V,   # CLF constraint
-        -L_g_h,   # CBF constraint (negated for inequality direction)
-        jnp.eye(dynamics.state_dim)
+    # A = jnp.vstack([
+    #     L_g_V,   # CLF constraint
+    #     -L_g_h,   # CBF constraint (negated for inequality direction)
+    #     jnp.eye(2)
+    # ])
+
+    A = jnp.array([
+        [L_g_V.flatten()[0].astype(float), -1.0],       # -Lgh u <= Lfh + alpha(h)
+        [-L_g_h.flatten()[0].astype(float), 0.0],       # LgV u - delta <= -LfV - gamma
+        [1, 0],
+        [0, 1]
     ])
 
     u = jnp.hstack([
-        (-L_f_V - clf_gain * V + clf_slack).squeeze(),   # CLF constraint
+        (-L_f_V - clf_gain * V).squeeze(),   # CLF constraint
         (L_f_h.squeeze() + cbf_gain * h).squeeze(),     # CBF constraint
-        u_max 
+        u_max, 
+        jnp.inf
     ])
 
     l = jnp.hstack([
         -jnp.inf,
         -jnp.inf,
-        -u_max
+        -u_max,
+        0.0
     ])
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
-    return sol, V, h
+    return sol, clf_gain*V, cbf_gain*h
 
 x_traj = []  # Store trajectory
 x_meas = [] # Measurements
@@ -124,7 +138,7 @@ covariances = []
 
 x_estimated, p_estimated = estimator.get_belief()
 
-@jit
+# @jit
 def get_b_vector(mu, sigma):
 
     # Extract the upper triangular elements of a matrix as a 1D array
@@ -137,6 +151,9 @@ def get_b_vector(mu, sigma):
 
 x_measured = x_initial_measurement
 
+solve_qp_cpu = jit(solve_qp, backend='cpu')
+
+
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
 
@@ -145,12 +162,12 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     belief = get_b_vector(x_estimated, p_estimated)
 
     # Solve QP
-    sol, V, h = solve_qp(belief)
+    sol, V, h = solve_qp_cpu(belief)
 
     clf_values.append(V)
     cbf_values.append(h)
 
-    u_opt = sol.primal[0]
+    u_opt = jnp.array([sol.primal[0][0]])
 
     # Apply control to the true state (x_true)
     x_true = x_true + dt * (dynamics.f(x_true) + dynamics.g(x_true) @ u_opt)
@@ -158,7 +175,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     estimator.predict(u_opt)
 
     # update measurement and estimator belief
-    if t > 0 and t%10 == 0:
+    if t > 0 and t%2 == 0:
         # obtain current measurement
         x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
 
@@ -282,7 +299,7 @@ print(f"Failure Probability Threshold (delta): {delta}")
 
 print("\n--- Control Parameters ---")
 print(f"CLF Linear Gain (clf_gain): {clf_gain}")
-print(f"CLF Slack (clf_slack): {clf_slack}")
+print(f"CLF Slack (clf_slack): {clf_slack_penalty}")
 print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
 
 # Print Metrics
@@ -293,6 +310,7 @@ print("Number of exceedances: ", np.sum(x_traj > wall_x))
 print("Max True value: ", np.max(x_traj))
 print("Max estimate value: ", np.max(x_est))
 print("Mean difference from obstacle: ", np.mean(wall_x - x_est))
+print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
 print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2)))
 
 # Plot distance from safety boudary of estimates, max estimate value, 
