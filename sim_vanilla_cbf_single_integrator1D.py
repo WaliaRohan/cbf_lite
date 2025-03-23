@@ -13,8 +13,8 @@ from estimators import *
 from sensor import noisy_sensor_mult as sensor
 
 # Define simulation parameters
-dt = 0.001  # Time step
-T = 1000 # Number of steps
+dt = 0.001 # Time step
+T = 5000 # Number of steps
 u_max = 1.0
 
 # Obstacle
@@ -115,7 +115,6 @@ cbf_values = []
 kalman_gains = []
 covariances = []
 
-x_traj.append(x_true)
 x_estimated, p_estimated = estimator.get_belief()
 
 @jit
@@ -128,6 +127,8 @@ def get_b_vector(mu, sigma):
     b = jnp.concatenate([mu, vec_sigma])
 
     return b
+
+x_measured = x_initial_measurement
 
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
@@ -145,16 +146,19 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # Apply control to the true state (x_true)
     x_true = x_true + dt * (dynamics.f(x_true) + dynamics.g(x_true) @ u_opt)
 
-    # obtain current measurement
-    x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+    estimator.predict(u_opt)
 
-    # update measurement every 10 iteration steps
-    if t > 0 and t%2 == 0:
+    # update measurement and estimator belief
+    if t > 0 and t%10 == 0:
+        # obtain current measurement
+        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+
         if estimator.name == "GEKF":
             estimator.update_1D(x_measured)
 
         if estimator.name == "EKF":
             estimator.update(x_measured)
+
     x_estimated, p_estimated = estimator.get_belief()
 
     # Store for plotting
@@ -194,23 +198,20 @@ plt.figure(figsize=(6, 4))
 plt.plot(x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2)
 plt.plot(x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=6)
 plt.plot(x_traj[:, 0], color="blue", label="True x")
+# Add horizontal lines
+plt.axhline(y=wall_x, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
+plt.axhline(y=goal_x, color="purple", linestyle="dashed", linewidth=1, label="Goal")
+# Compute 2-sigma bounds (99% confidence interval)
+cov = np.abs(covariances).squeeze(2)
+cov_std = 2 * np.sqrt(cov) # Since covariances is 1D
+# Plot 2-sigma confidence interval
+plt.fill_between(range(len(x_est)), (x_est - cov_std).squeeze(), (x_est + cov_std).squeeze(), 
+                 color="cyan", alpha=0.3, label="95% confidence interval")
 plt.xlabel("Time step")
 plt.ylabel("X")
 plt.legend()
 plt.title("X Trajectory")
 plt.show()
-
-# # Third figure: Y component comparison
-# plt.figure(figsize=(6, 4))
-# plt.plot(x_meas[:, 1], color="green", label="Measured y", linestyle="dashed", linewidth=2)
-# plt.plot(x_est[:, 1], color="orange", label="Estimated y", linestyle="dotted", linewidth=2)
-# plt.plot(x_traj[:, 1], color="blue", label="True y")
-# plt.xlabel("Time step")
-# plt.ylabel("Y")
-# plt.legend()
-# plt.title("Y Trajectory")
-# plt.show()
-
 
 # Plot controls
 plt.figure(figsize=(6, 4))

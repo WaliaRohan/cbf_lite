@@ -45,7 +45,6 @@ sigma_v = jnp.sqrt(0.0001)
 # sigma_v = jnp.sqrt(7.97e-5)
 
 x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v)
-
 estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
 # estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
@@ -71,7 +70,6 @@ print(jax.default_backend())
 
 @jit
 def solve_qp(b):
-
     x_estimated, sigma = cbf.extract_mu_sigma(b)
 
     """Solve the CLF-CBF-QP using JAX & OSQP"""
@@ -137,6 +135,8 @@ def get_b_vector(mu, sigma):
 
     return b
 
+x_measured = x_initial_measurement
+
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
 
@@ -155,13 +155,13 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # Apply control to the true state (x_true)
     x_true = x_true + dt * (dynamics.f(x_true) + dynamics.g(x_true) @ u_opt)
 
-    # obtain current measurement
-    x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
-
-    # updated estimate 
     estimator.predict(u_opt)
-    # update measurement every 10 iteration steps
-    if t > 0 and t%2 == 0:
+
+    # update measurement and estimator belief
+    if t > 0 and t%10 == 0:
+        # obtain current measurement
+        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+
         if estimator.name == "GEKF":
             estimator.update_1D(x_measured)
 
@@ -176,7 +176,6 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     x_est.append(x_estimated)
     kalman_gains.append(estimator.K)
     covariances.append(p_estimated)
-
 
 # Convert to JAX arrays
 x_traj = jnp.array(x_traj)
@@ -217,7 +216,6 @@ cov_std = 2 * np.sqrt(cov) # Since covariances is 1D
 # Plot 2-sigma confidence interval
 plt.fill_between(range(len(x_est)), (x_est - cov_std).squeeze(), (x_est + cov_std).squeeze(), 
                  color="cyan", alpha=0.3, label="95% confidence interval")
-plt.xlabel("Time step")
 plt.xlabel("Time step")
 plt.ylabel("X")
 plt.legend()
