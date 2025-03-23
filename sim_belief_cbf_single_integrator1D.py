@@ -26,12 +26,28 @@ x_init = 5.0
 x_true = jnp.array([x_init])  # Start position
 goal = jnp.array([goal_x])  # Goal position
 obstacle = jnp.array([wall_x])  # Wall
-safe_radius = 0.0  # Safety radius around the obstacle
 
 dynamics = SingleIntegrator1D() 
 
-x_initial_measurement = sensor(x_true, 0)
-estimator = GEKF(dynamics, sensor, dt, x_init=x_initial_measurement, R=jnp.sqrt(0.0001)*jnp.eye(dynamics.state_dim))
+# High noise
+mu_u = 0.1
+sigma_u = jnp.sqrt(0.001)
+
+mu_v = 0.01
+sigma_v = jnp.sqrt(0.0001)
+
+# Low noise
+# mu_u = 0.0174
+# sigma_u = jnp.sqrt(2.916e-4) # 10 times more than what was shown in GEKF paper
+
+# # Additive noise
+# mu_v = -0.0386
+# sigma_v = jnp.sqrt(7.97e-5)
+
+x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v)
+
+estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+# estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -108,19 +124,6 @@ cbf_values = []
 kalman_gains = []
 covariances = []
 
-# num_steps = int(T/dt)
-# state_dim = dynamics.state_dim
-# control_dim = dynamics.g_matrix.shape[1]
-
-# x_traj = np.zeros((num_steps, state_dim))  # Assuming 'state_dim' is known
-# x_meas = np.zeros((num_steps, state_dim))
-# x_est = np.zeros((num_steps, state_dim))
-# u_traj = np.zeros((num_steps, control_dim))  # Assuming 'control_dim' is known
-# clf_values = np.zeros(num_steps)
-# cbf_values = np.zeros(num_steps)
-# kalman_gains = np.zeros((num_steps, 1))  # Adjust shape as needed
-# covariances = np.zeros((num_steps, 1))  # Assuming covariance is square
-
 x_estimated, p_estimated = estimator.get_belief()
 
 @jit
@@ -137,7 +140,6 @@ def get_b_vector(mu, sigma):
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
 
-    # x_traj[t] = x_true.copy()
     x_traj.append(x_true)
 
     belief = get_b_vector(x_estimated, p_estimated)
@@ -154,7 +156,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     x_true = x_true + dt * (dynamics.f(x_true) + dynamics.g(x_true) @ u_opt)
 
     # obtain current measurement
-    x_measured =  sensor(x_true, t)
+    x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
 
     # updated estimate 
     estimator.predict(u_opt)

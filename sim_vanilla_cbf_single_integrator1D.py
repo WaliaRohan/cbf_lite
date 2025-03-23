@@ -20,23 +20,33 @@ u_max = 1.0
 # Obstacle
 wall_x = 7.0
 goal_x = 10.0
+x_init = 5.0
 
 # Initial state (truth)
-x_true = jnp.array([5.0])  # Start position
+x_true = jnp.array([x_init])  # Start position
 goal = jnp.array([goal_x])  # Goal position
 obstacle = jnp.array([wall_x])  # Wall
-safe_radius = 0.0  # Safety radius around the obstacle
 
 dynamics = SingleIntegrator1D() 
 
-x_initial_measurement = sensor(x_true, 0)
-estimator = EKF(dynamics, sensor, dt, x_init=x_initial_measurement, R=jnp.sqrt(0.0001)*jnp.eye(dynamics.state_dim))
+# High noise
+mu_u = 0.1
+sigma_u = jnp.sqrt(0.001)
 
-# Define belief CBF parameters
-n = dynamics.state_dim
-alpha = jnp.array([-1.0])  # Example matrix
-beta = jnp.array([-wall_x])  # Example vector
-delta = 0.5  # Probability threshold
+mu_v = 0.01
+sigma_v = jnp.sqrt(0.0001)
+
+# Low noise
+# mu_u = 0.0174
+# sigma_u = jnp.sqrt(2.916e-4) # 10 times more than what was shown in GEKF paper
+
+# # Additive noise
+# mu_v = -0.0386
+# sigma_v = jnp.sqrt(7.97e-5)
+
+x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v)
+estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+# estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
 # Control params
 clf_gain = 0.1  # CLF linear gain
@@ -63,7 +73,6 @@ def solve_qp(x_estimated):
     L_f_V = jnp.dot(grad_V_x.T, dynamics.f(x_estimated))
     L_g_V = jnp.dot(grad_V_x.T, dynamics.g(x_estimated))
     
-
     # Compute CBF components
     h = cbf(x_estimated, obstacle)
     grad_h_x = grad_h(x_estimated, obstacle)  # ∇h(x)
@@ -72,13 +81,13 @@ def solve_qp(x_estimated):
     L_g_h = jnp.dot(grad_h_x, dynamics.g(x_estimated))
 
     # Define QP matrices
-    Q = jnp.eye(1)  # Minimize ||u||^2
-    c = jnp.zeros(1)  # No linear cost term
+    Q = jnp.eye(dynamics.state_dim)  # Minimize ||u||^2
+    c = jnp.zeros(dynamics.state_dim)  # No linear cost term
 
     A = jnp.vstack([
         L_g_V,   # CLF constraint
         -L_g_h,   # CBF constraint (negated for inequality direction)
-        jnp.eye(1)
+        jnp.eye(dynamics.state_dim)
     ])
 
     u = jnp.hstack([
@@ -123,6 +132,8 @@ def get_b_vector(mu, sigma):
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
 
+    x_traj.append(x_true)
+
     # Solve QP
     sol, V, h = solve_qp(x_estimated)
 
@@ -135,7 +146,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     x_true = x_true + dt * (dynamics.f(x_true) + dynamics.g(x_true) @ u_opt)
 
     # obtain current measurement
-    x_measured =  sensor(x_true, t)
+    x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
 
     # update measurement every 10 iteration steps
     if t > 0 and t%2 == 0:
@@ -147,7 +158,6 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     x_estimated, p_estimated = estimator.get_belief()
 
     # Store for plotting
-    x_traj.append(x_true.copy())
     u_traj.append(u_opt)
     x_meas.append(x_measured)
     x_est.append(x_estimated)

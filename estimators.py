@@ -11,9 +11,8 @@ from openpyxl import load_workbook
 class EKF:
     """Discrete EKF"""
     
-    def __init__(self, dynamics, sensor_model, dt, x_init=None, P_init=None, Q=None, R=None):
+    def __init__(self, dynamics, dt, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
-        self.sensor_model = sensor_model  # Sensor model
         self.dt = dt  # Time step
         self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim))
         self.name = "EKF"
@@ -40,7 +39,6 @@ class EKF:
     def update(self, z):
         """Measurement update step of EKF."""
         H_x = jnp.eye(len(self.x_hat))  # Jacobian of measurement model (assuming direct state observation)
-        # y = z - self.sensor_model(self.x_hat)  # Innovation (difference between measured and predicted state)
         y = z - self.x_hat # Innovation term: note self.x_hat comes from identity observation model
 
         # Kalman gain
@@ -60,12 +58,17 @@ class EKF:
 class GEKF:
     """Continuous-Discrete GEKF"""
     
-    def __init__(self, dynamics, sensor_model, dt, x_init=None, P_init=None, Q=None, R=None):
+    def __init__(self, dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
-        self.sensor_model = sensor_model  # Sensor model
         self.dt = dt  # Time step
         self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim))
         self.name = "GEKF"
+
+        self.mu_u = mu_u
+        self.sigma_u = sigma_u
+
+        self.mu_v = mu_v
+        self.sigma_v = sigma_v
 
         # Initialize belief (state estimate)
         self.x_hat = x_init if x_init is not None else jnp.zeros(dynamics.state_dim)
@@ -73,7 +76,7 @@ class GEKF:
         # Covariance initialization
         self.P = P_init if P_init is not None else jnp.eye(dynamics.state_dim) * 0.1  
         self.Q = dynamics.Q # Process noise covariance
-        self.R = R if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
+        self.R = sigma_v*jnp.eye(dynamics.state_dim) if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
 
     def predict(self, u):
         """Predict step of EKF."""
@@ -90,20 +93,13 @@ class GEKF:
     def update(self, z):
         """Measurement update step of EKF."""
         """z: measurement"""
-
         mult_state = 0
-        
-        # Multiplicative noise
-        mu_u = 0.0174
-        sigma_u = jnp.sqrt(2.916e-4) # 10 times more than what was shown in GEKF paper
 
-        # Additive noise
-        mu_v = -0.0386
-        sigma_v = jnp.sqrt(7.97e-5)
-        
-        # h_z = self.sensor_model(self.x_hat, t) # replace with h_z = h(z) for more complex models
-        # dhdx_fn = jax.jacfwd(self.sensor_model, argnums=0)  # Jacobian of measurement model (assuming direct state observation), Differentiate w.r.t x
-        # dhdx = dhdx_fn(self.x_hat, t)
+        mu_u = self.mu_u
+        sigma_u = self.sigma_u
+
+        mu_v = self.mu_v
+        sigma_v = self.sigma_v
       
         # Perfect state observation
         h_z = self.x_hat
@@ -134,20 +130,11 @@ class GEKF:
         """Measurement update step of EKF."""
         """z: measurement"""
 
-        mult_state = 0
-        
-        # mu_u = 0.0174
-        # sigma_u = jnp.sqrt(2.916e-4) # 10 times more than what was shown in GEKF paper
+        mu_u = self.mu_u
+        sigma_u = self.sigma_u
 
-        # # Additive noise
-        # mu_v = -0.0386
-        # sigma_v = jnp.sqrt(7.97e-5)
-
-        mu_u = 0.1
-        sigma_u = jnp.sqrt(0.001)
-
-        mu_v = 0.01
-        sigma_v = jnp.sqrt(0.0001)
+        mu_v = self.mu_v
+        sigma_v = self.sigma_v
         
         # Perfect state observation
         h_z = self.x_hat
