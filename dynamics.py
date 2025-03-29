@@ -24,6 +24,31 @@ class SingleIntegrator1D:
     
     def x_dot(self, x, u):
         return self.f_matrix * x + self.g_matrix @ u
+    
+
+class NonLinearSingleIntegrator1D:
+    """1D Single Integrator Dynamics with Drift: dx/dt = a * x + u"""
+    
+    def __init__(self, a=0.1, b=1.0, Q=None):
+        self.state_dim = 1
+        self.name="Single Integrator 1D"
+        self.a = a  # Drift coefficient
+        self.f_matrix = jnp.array([a])  # Linear drift term
+        self.g_matrix = jnp.array([[b]])  # Control directly influences state
+        if Q is None:
+            self.Q = jnp.eye(1) * 0  # Default to zero process noise
+        else:
+            self.Q = Q
+
+    def f(self, x):
+        """Drift dynamics: f(x)"""
+        return self.f_matrix * jnp.cos(x)  # Linear drift
+
+    def g(self, x):
+        return self.g_matrix  # Constant control influence
+    
+    def x_dot(self, x, u):
+        return self.f_matrix(x)+ self.g_matrix(x) @ u
 
 class SimpleDynamics:
     """Simple system dynamics: dx/dt = f(x) + g(x) u"""

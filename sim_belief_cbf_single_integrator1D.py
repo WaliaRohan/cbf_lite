@@ -8,33 +8,33 @@ from tqdm import tqdm
 
 from cbfs import BeliefCBF
 from cbfs import vanilla_clf_x as clf
-from dynamics import SingleIntegrator1D
+from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
 
 # Define simulation parameters
 dt = 0.001 # Time step
 T = 5000 # Number of steps
-u_max = 1.0
+u_max = 10.0
 
 # Obstacle
-wall_x = 7.0
-goal_x = 10.0
-x_init = 6.8
+wall_x = 5.0
+goal_x = 6.0
+x_init = 1.0
 
 # Initial state (truth)
 x_true = jnp.array([x_init])  # Start position
 goal = jnp.array([goal_x])  # Goal position
 obstacle = jnp.array([wall_x])  # Wall
 
-dynamics = SingleIntegrator1D() 
+dynamics = NonLinearSingleIntegrator1D() 
 
 # High noise
 mu_u = 0.1
 sigma_u = jnp.sqrt(0.001)
 
 mu_v = 0.01
-sigma_v = jnp.sqrt(0.0001)
+sigma_v = jnp.sqrt(0.0005)
 
 # Low noise
 # mu_u = 0.0174
@@ -56,9 +56,10 @@ delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
-clf_gain = 10.0  # CLF linear gain
-clf_slack_penalty = 1000 
-cbf_gain = 10.0  # CBF linear gain
+clf_gain = 20.0  # CLF linear gain
+clf_slack_penalty = 0.00025
+# clf_slack_penalty = 100.0
+cbf_gain = 200.0  # CBF linear gain
 
 # Autodiff: Compute Gradients for CLF and CBF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -95,12 +96,6 @@ def solve_qp(b):
     
       # Minimize ||u||^2 and slack
     c = jnp.zeros(2)  # No linear cost term
-
-    # A = jnp.vstack([
-    #     L_g_V,   # CLF constraint
-    #     -L_g_h,   # CBF constraint (negated for inequality direction)
-    #     jnp.eye(2)
-    # ])
 
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0],       # -Lgh u <= Lfh + alpha(h)
@@ -175,7 +170,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     estimator.predict(u_opt)
 
     # update measurement and estimator belief
-    if t > 0 and t%2 == 0:
+    if t > 0 and t%10 == 0:
         # obtain current measurement
         x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
 
@@ -202,6 +197,8 @@ x_traj = np.array(x_traj)
 x_meas = np.array(x_meas)
 x_est = np.array(x_est)
 
+time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
+
 # Plot trajectory with y-values set to zero
 plt.figure(figsize=(6, 6))
 plt.plot(x_meas[:, 0], jnp.zeros_like(x_meas[:, 0]), color="Green", linestyle=":", label="Measured Trajectory")
@@ -212,71 +209,77 @@ plt.scatter(goal[0], 0, c="g", marker="*", s=200, label="Goal")
 # Plot vertical line at x = obstacle[0]
 plt.axvline(x=obstacle[0], color="r", linestyle="--", label="Obstacle Boundary")
 
-plt.xlabel("x")
-plt.ylabel("y (zeroed)")
-plt.title("1D X-Trajectory (CLF-CBF QP-Controlled)")
+plt.xlabel("x", fontsize=14)
+plt.ylabel("y (zeroed)", fontsize=14)
+plt.title("1D X-Trajectory (CLF-CBF QP-Controlled)", fontsize=14)
 plt.legend()
 plt.grid()
 plt.show()
 
 # Second figure: X component comparison
-plt.figure(figsize=(6, 4))
-plt.plot(x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2)
-plt.plot(x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=6)
-plt.plot(x_traj[:, 0], color="blue", label="True x")
+plt.figure(figsize=(10, 10))
+plt.plot(time, x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2, alpha=0.5)
+plt.plot(time, x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=6)
+plt.plot(time, x_traj[:, 0], color="blue", label="True x")
 # Add horizontal lines
 plt.axhline(y=wall_x, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
 plt.axhline(y=goal_x, color="purple", linestyle="dashed", linewidth=1, label="Goal")
-# Compute 2-sigma bounds (99% confidence interval)
-cov = np.abs(covariances).squeeze(2)
-cov_std = 2 * np.sqrt(cov) # Since covariances is 1D
-# Plot 2-sigma confidence interval
-plt.fill_between(range(len(x_est)), (x_est - cov_std).squeeze(), (x_est + cov_std).squeeze(), 
-                 color="cyan", alpha=0.3, label="95% confidence interval")
-plt.xlabel("Time step")
-plt.ylabel("X")
-plt.legend()
-plt.title("X Trajectory")
+# # Compute 2-sigma bounds (99% confidence interval)
+# cov = np.abs(covariances).squeeze(2)
+# cov_std = 2 * np.sqrt(cov) # Since covariances is 1D
+# # Plot 2-sigma confidence interval
+# plt.fill_between(range(len(x_est)), (x_est - cov_std).squeeze(), (x_est + cov_std).squeeze(), 
+#                  color="cyan", alpha=0.3, label="95% confidence interval")
+plt.xlabel("Time step (s)", fontsize=16)
+plt.ylabel("x (m)", fontsize=16)
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
+plt.legend(fontsize=14)
+plt.title("X position (m)", fontsize=18)
 plt.show()
 
-# Plot controls
-plt.figure(figsize=(6, 4))
-plt.plot(cbf_values, color='red', label="CBF")
-plt.plot(clf_values, color='green', label="CLF")
-plt.plot([u[0] for u in u_traj], color='blue', label="u_x")
-plt.xlabel("Time step")
-plt.ylabel("Value")
-plt.title("CBF, CLF, and Control Trajectories")
-plt.legend()
-plt.show()
+# # Plot controls
+# plt.figure(figsize=(6, 4))
+# plt.plot(time, np.array(cbf_values), color='red', label="CBF")
+# plt.plot(time, np.array(clf_values), color='green', label="CLF")
+# plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
+# plt.xlabel("Time step (s)")
+# plt.ylabel("Value")
+# plt.title(f"CBF, CLF, and Control Values ({estimator.name})")
+# # Tick labels font size
+# plt.xticks(fontsize=14)
+# plt.yticks(fontsize=14)
+# # Legend font size
+# plt.legend(fontsize=14)
+# plt.show()
 
-kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-covariance_traces = [jnp.trace(P) for P in covariances]
+# kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+# covariance_traces = [jnp.trace(P) for P in covariances]
 
-# Plot trace of Kalman gains and covariances
-plt.figure(figsize=(6, 4))
-plt.plot(kalman_gain_traces, "b-", label="Trace of Kalman Gain")
-plt.plot(covariance_traces, "r-", label="Trace of Covariance")
-plt.xlabel("Time Step")
-plt.ylabel("Trace Value")
-plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-plt.legend()
-plt.grid()
-plt.show()
+# # Plot trace of Kalman gains and covariances
+# plt.figure(figsize=(6, 4))
+# plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+# plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+# plt.xlabel("Time Step (s)")
+# plt.ylabel("Trace Value")
+# plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+# plt.legend()
+# plt.grid()
+# plt.show()
 
 
-# Plot distance from obstacle
+# # Plot distance from obstacle
 
-dist = wall_x - x_est
+# dist = wall_x - x_est
 
-plt.figure(figsize=(6, 4))
-plt.plot(dist[:, 0], color="red", linestyle="dashed")
-plt.title(f"{estimator.name} Distance from safe boundary")
-plt.xlabel("Time Step")
-plt.ylabel("Distance")
-plt.legend()
-plt.grid()
-plt.show()
+# plt.figure(figsize=(6, 4))
+# plt.plot(time, dist[:, 0], color="red", linestyle="dashed")
+# plt.title(f"Distance from safe boundary ({estimator.name})")
+# plt.xlabel("Time Step (s)")
+# plt.ylabel("Distance")
+# plt.legend()
+# plt.grid()
+# plt.show()
 
 
 # Print Sim Params
@@ -306,11 +309,14 @@ print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
 
 print("\n--- Results ---")
 
-print("Number of exceedances: ", np.sum(x_traj > wall_x))
-print("Max True value: ", np.max(x_traj))
+print("Number of estimate exceedances: ", np.sum(x_est > wall_x))
+print("Number of true exceedences", np.sum(x_traj > wall_x))
 print("Max estimate value: ", np.max(x_est))
-print("Mean difference from obstacle: ", np.mean(wall_x - x_est))
+print("Max true value: ", np.max(x_traj))
+print("Mean true distance from obstacle: ", np.mean(wall_x - x_est))
 print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
+print("Cummulative distance to goal: ", np.sum(np.abs(x_traj - wall_x)))
 print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2)))
+
 
 # Plot distance from safety boudary of estimates, max estimate value, 
