@@ -8,33 +8,35 @@ from tqdm import tqdm
 
 from cbfs import vanilla_cbf_wall as cbf
 from cbfs import vanilla_clf_x as clf
-from dynamics import SingleIntegrator1D
+from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
 
 # Define simulation parameters
 dt = 0.001 # Time step
 T = 5000 # Number of steps
-u_max = 1.0
+u_max = 10.0
 
 # Obstacle
-wall_x = 7.0
-goal_x = 10.0
-x_init = 5.0
+wall_x = 5.0
+goal_x = 6.0
+x_init = 1.0
 
 # Initial state (truth)
 x_true = jnp.array([x_init])  # Start position
 goal = jnp.array([goal_x])  # Goal position
 obstacle = jnp.array([wall_x])  # Wall
 
-dynamics = SingleIntegrator1D() 
+sensor_update_frequency = 0.1 # Hz
+
+dynamics = NonLinearSingleIntegrator1D() 
 
 # High noise
 mu_u = 0.1
 sigma_u = jnp.sqrt(0.001)
 
 mu_v = 0.01
-sigma_v = jnp.sqrt(0.0001)
+sigma_v = jnp.sqrt(0.0005)
 
 # Low noise
 # mu_u = 0.0174
@@ -49,9 +51,9 @@ estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_me
 # estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
 # Control params
-clf_gain = 0.1  # CLF linear gain
-clf_slack = 10.0 # CLF slack
-cbf_gain = 20.0  # CBF linear gain
+clf_gain = 1.0  # CLF linear gain
+clf_slack_penalty = 50.0
+cbf_gain = 200.0  # CBF linear gain
 
 # Autodiff: Compute Gradients for CLF and CBF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -81,30 +83,36 @@ def solve_qp(x_estimated):
     L_g_h = jnp.dot(grad_h_x, dynamics.g(x_estimated))
 
     # Define QP matrices
-    Q = jnp.eye(dynamics.state_dim)  # Minimize ||u||^2
-    c = jnp.zeros(dynamics.state_dim)  # No linear cost term
+    Q = jnp.array([
+        [1, 0],
+        [0, 2*clf_slack_penalty]
+    ])
+    c = jnp.zeros(2)  # No linear cost term
 
-    A = jnp.vstack([
-        L_g_V,   # CLF constraint
-        -L_g_h,   # CBF constraint (negated for inequality direction)
-        jnp.eye(dynamics.state_dim)
+    A = jnp.array([
+        [L_g_V.flatten()[0].astype(float), -1.0], # -Lgh u         <=  Lfh + alpha(h)
+        [-L_g_h.flatten()[0].astype(float), 0.0], #  LgV u - delta <= -LfV - gamma(V)
+        [1, 0],
+        [0, 1]
     ])
 
     u = jnp.hstack([
-        (-L_f_V - clf_gain * V + clf_slack).squeeze(),   # CLF constraint
-        (L_f_h.squeeze() + cbf_gain * h).squeeze(),     # CBF constraint
-        u_max 
+        (-L_f_V - clf_gain * V).squeeze(),          # CLF constraint
+        (L_f_h.squeeze() + cbf_gain * h).squeeze(), # CBF constraint
+        u_max, 
+        jnp.inf # no upper limit on slack
     ])
 
     l = jnp.hstack([
-        -jnp.inf,
-        -jnp.inf,
-        -u_max
+        -jnp.inf, # No lower limit on CLF condition
+        -jnp.inf, # No lower limit on CBF condition
+        -u_max,
+        0.0 # slack can't be negative
     ])
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
-    return sol, V, h
+    return sol, clf_gain*V, cbf_gain*h
 
 x_traj = []  # Store trajectory
 x_meas = [] # Measurements
@@ -141,7 +149,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     clf_values.append(V)
     cbf_values.append(h)
 
-    u_opt = sol.primal[0]
+    u_opt = jnp.array([sol.primal[0][0]])
 
     # Apply control to the true state (x_true)
     x_true = x_true + dt * (dynamics.f(x_true) + dynamics.g(x_true) @ u_opt)
@@ -149,7 +157,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     estimator.predict(u_opt)
 
     # update measurement and estimator belief
-    if t > 0 and t%10 == 0:
+    if t > 0 and t%(1/sensor_update_frequency) == 0:
         # obtain current measurement
         x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
 
@@ -237,3 +245,37 @@ plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
 plt.legend()
 plt.grid()
 plt.show()
+
+# Print Sim Params
+
+print("\n--- Simulation Parameters ---")
+
+print(dynamics.name)
+print(estimator.name)
+print(f"Time Step (dt): {dt}")
+print(f"Number of Steps (T): {T}")
+print(f"Control Input Max (u_max): {u_max}")
+print(f"Sensor Update Frequency (Hz): {sensor_update_frequency}")
+
+print("\n--- Environment Setup ---")
+print(f"Obstacle Position (wall_x): {wall_x}")
+print(f"Goal Position (goal_x): {goal_x}")
+print(f"Initial Position (x_init): {x_init}")
+
+print("\n--- Control Parameters ---")
+print(f"CLF Linear Gain (clf_gain): {clf_gain}")
+print(f"CLF Slack (clf_slack): {clf_slack_penalty}")
+print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
+
+# Print Metrics
+
+print("\n--- Results ---")
+
+print("Number of estimate exceedances: ", np.sum(x_est > wall_x))
+print("Number of true exceedences", np.sum(x_traj > wall_x))
+print("Max estimate value: ", np.max(x_est))
+print("Max true value: ", np.max(x_traj))
+print("Mean true distance from obstacle: ", np.mean(wall_x - x_est))
+print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
+print("Cummulative distance to goal: ", np.sum(np.abs(x_traj - wall_x)))
+print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2)))
