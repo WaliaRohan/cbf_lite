@@ -27,6 +27,8 @@ x_true = jnp.array([x_init])  # Start position
 goal = jnp.array([goal_x])  # Goal position
 obstacle = jnp.array([wall_x])  # Wall
 
+sensor_update_frequency = 0.1 # Hz
+
 dynamics = NonLinearSingleIntegrator1D() 
 
 # High noise
@@ -56,9 +58,9 @@ delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
-clf_gain = 20.0  # CLF linear gain
-clf_slack_penalty = 0.00025
-# clf_slack_penalty = 100.0
+clf_gain = 1.0  # CLF linear gain
+# clf_slack_penalty = 0.00025
+clf_slack_penalty = 50.0
 cbf_gain = 200.0  # CBF linear gain
 
 # Autodiff: Compute Gradients for CLF and CBF
@@ -169,7 +171,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     estimator.predict(u_opt)
 
     # update measurement and estimator belief
-    if t > 0 and t%10 == 0:
+    if t > 0 and t%(1/sensor_update_frequency) == 0:
         # obtain current measurement
         x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
 
@@ -290,6 +292,7 @@ print(estimator.name)
 print(f"Time Step (dt): {dt}")
 print(f"Number of Steps (T): {T}")
 print(f"Control Input Max (u_max): {u_max}")
+print(f"Sensor Update Frequency (Hz): {sensor_update_frequency}")
 
 print("\n--- Environment Setup ---")
 print(f"Obstacle Position (wall_x): {wall_x}")
