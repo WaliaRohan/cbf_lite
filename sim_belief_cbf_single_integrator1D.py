@@ -50,8 +50,8 @@ estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_me
 
 # Define belief CBF parameters
 n = dynamics.state_dim
-alpha = jnp.array([-1.0])  # Example matrix
-beta = jnp.array([-wall_x])  # Example vector
+alpha = jnp.array([-1.0])
+beta = jnp.array([-wall_x])
 delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
@@ -88,34 +88,33 @@ def solve_qp(b):
     L_f_h = L_f_hb
     L_g_h = L_g_hb
 
-    # Define QP matrices
+    # Define Q matrix: Minimize ||u||^2 and slack (penalty*delta^2)
     Q = jnp.array([
         [1, 0],
         [0, 2*clf_slack_penalty]
     ])
     
-      # Minimize ||u||^2 and slack
     c = jnp.zeros(2)  # No linear cost term
 
     A = jnp.array([
-        [L_g_V.flatten()[0].astype(float), -1.0],       # -Lgh u <= Lfh + alpha(h)
-        [-L_g_h.flatten()[0].astype(float), 0.0],       # LgV u - delta <= -LfV - gamma
+        [L_g_V.flatten()[0].astype(float), -1.0], # -Lgh u         <=  Lfh + alpha(h)
+        [-L_g_h.flatten()[0].astype(float), 0.0], #  LgV u - delta <= -LfV - gamma(V)
         [1, 0],
         [0, 1]
     ])
 
     u = jnp.hstack([
-        (-L_f_V - clf_gain * V).squeeze(),   # CLF constraint
-        (L_f_h.squeeze() + cbf_gain * h).squeeze(),     # CBF constraint
+        (-L_f_V - clf_gain * V).squeeze(),          # CLF constraint
+        (L_f_h.squeeze() + cbf_gain * h).squeeze(), # CBF constraint
         u_max, 
-        jnp.inf
+        jnp.inf # no upper limit on slack
     ])
 
     l = jnp.hstack([
-        -jnp.inf,
-        -jnp.inf,
+        -jnp.inf, # No lower limit on CLF condition
+        -jnp.inf, # No lower limit on CBF condition
         -u_max,
-        0.0
+        0.0 # slack can't be negative
     ])
 
     # Solve the QP using jaxopt OSQP
