@@ -52,7 +52,7 @@ class BeliefCBF:
         return mu, sigma
     
     # @jit
-    def get_b_vector(mu, sigma):
+    def get_b_vector(self, mu, sigma):
 
         # Extract the upper triangular elements of a matrix as a 1D array
         upper_triangular_indices = jnp.triu_indices(sigma.shape[0])
