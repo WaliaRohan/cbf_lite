@@ -134,28 +134,16 @@ covariances = []
 
 x_estimated, p_estimated = estimator.get_belief()
 
-# @jit
-def get_b_vector(mu, sigma):
-
-    # Extract the upper triangular elements of a matrix as a 1D array
-    upper_triangular_indices = jnp.triu_indices(sigma.shape[0])
-    vec_sigma = sigma[upper_triangular_indices]
-
-    b = jnp.concatenate([mu, vec_sigma])
-
-    return b
-
 x_measured = x_initial_measurement
 
 solve_qp_cpu = jit(solve_qp, backend='cpu')
-
 
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
 
     x_traj.append(x_true)
 
-    belief = get_b_vector(x_estimated, p_estimated)
+    belief = cbf.get_b_vector(x_estimated, p_estimated)
 
     # Solve QP
     sol, V, h = solve_qp_cpu(belief)
@@ -193,7 +181,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 # Convert to JAX arrays
 x_traj = jnp.array(x_traj)
 
-# Conver to numpy arrays for plotting
+# Convert to numpy arrays for plotting
 x_traj = np.array(x_traj)
 x_meas = np.array(x_meas)
 x_est = np.array(x_est)

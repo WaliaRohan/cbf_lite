@@ -51,6 +51,17 @@ class BeliefCBF:
 
         return mu, sigma
     
+    # @jit
+    def get_b_vector(mu, sigma):
+
+        # Extract the upper triangular elements of a matrix as a 1D array
+        upper_triangular_indices = jnp.triu_indices(sigma.shape[0])
+        vec_sigma = sigma[upper_triangular_indices]
+
+        b = jnp.concatenate([mu, vec_sigma])
+
+        return b
+    
     def h_b(self, b):
         """Computes h_b(b) given belief state b = [mu, vec_u(Sigma)]"""
         mu, sigma = self.extract_mu_sigma(b)
