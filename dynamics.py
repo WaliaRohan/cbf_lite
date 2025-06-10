@@ -72,6 +72,46 @@ class SimpleDynamics:
     
     def x_dot(self, x, u):
         return self.f_matrix@x + self.g_matrix@u
+
+class LinearDoubleIntegrator1D:
+    """1D Linear Double Integrator:
+    State: x = [x1 (position), x2 (velocity)]
+    Dynamics: dx1/dt = x2, dx2/dt = u
+    """
+
+    def __init__(self, Q=None):
+        self.state_dim = 2
+        self.name = "Linear Double Integrator 1D"
+
+        # Control influence matrix: u affects acceleration (x2_dot)
+        self.g_matrix = jnp.array([[0.0],
+                                   [1.0]])
+
+        # Default process noise
+        if Q is None:
+            self.Q = jnp.eye(2) * 0
+        else:
+            self.Q = Q
+
+    def f(self, x):
+        """Drift dynamics: f(x)"""
+        x_flat = x.ravel()
+        x2 = x_flat[1]
+        return jnp.array([[x2], [0.0]])  # dx1 = x2, dx2 = 0
+
+    def g(self, x):
+        """
+        Control influence: constant
+        Note: argument x is not required. However, this function signature is
+        required to be compatible with the simulation code.
+        """
+        return self.g_matrix
+
+    def x_dot(self, x, u):
+        """Total dynamics: dx/dt = f(x) + g(x)u"""
+
+        # Reshape u to ensure it has atleast 1 column
+        return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
     
 class NonlinearSingleIntegrator:
     """Nonlinear single integrator dynamics: dx/dt = f(x) + g(x) u"""
