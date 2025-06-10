@@ -5,6 +5,7 @@ import jax.numpy as jnp
 import jax.scipy.linalg as linalg
 import pandas as pd
 from jax import jit
+from jax.scipy.special import erf, erfinv
 from openpyxl import load_workbook
 
 
@@ -25,28 +26,40 @@ class EKF:
         self.Q = dynamics.Q # Process noise covariance
         self.R = R if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
 
+        self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
+        self.sigma_minus = self.P
+
     def predict(self, u):
         """Predict step of EKF."""
         # Nonlinear state propagation
-        self.x_hat = self.x_hat + self.dt * (self.dynamics.f(self.x_hat) + self.dynamics.g(self.x_hat) @ u)
+        # self.x_hat = self.x_hat + self.dt * (self.dynamics.f(self.x_hat) + self.dynamics.g(self.x_hat) @ u)
+        self.x_hat = self.x_hat + self.dt * self.dynamics.x_dot(self.x_hat, u)
 
         # Compute Jacobian of dynamics (linearization)
-        F_x = jax.jacobian(lambda x: x + self.dt * (self.dynamics.f(x) + self.dynamics.g(x) @ u))(self.x_hat)
+        # F_x = jax.jacobian(lambda x: x + self.dt * (self.dynamics.f(x) + self.dynamics.g(x) @ u))(self.x_hat)
+        F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
 
         # Discrete covariance update
-        self.P = F_x @ self.P @ F_x.T + self.Q
+        # self.P = F_x @ self.P @ F_x.T + self.Q
+        P_dot = (F @ self.P + F.T @ self.P).squeeze() + self.Q
+        self.P = self.P + P_dot*self.dt
 
     def update(self, z):
         """Measurement update step of EKF."""
-        H_x = jnp.eye(len(self.x_hat))  # Jacobian of measurement model (assuming direct state observation)
+        H_x = jnp.eye(self.dynamics.state_dim)  # Jacobian of measurement model (assuming direct state observation)
         y = z - self.x_hat # Innovation term: note self.x_hat comes from identity observation model
 
         # Kalman gain
         S = H_x @ self.P @ H_x.T + self.R
         self.K = self.P @ H_x.T @ linalg.inv(S)
 
+        # Update Innovation Covariance
+        self.in_cov = self.K @ S @ self.K.T
+
         # Update state estimate
-        self.x_hat = self.x_hat + self.K @ y
+        self.x_hat = self.x_hat + y @ self.K
+
+        self.sigma_minus = self.P # for computing probability bound
 
         # Update covariance
         self.P = (jnp.eye(len(z)) - self.K @ H_x) @ self.P
@@ -54,6 +67,27 @@ class EKF:
     def get_belief(self):
         """Return the current belief (state estimate)."""
         return self.x_hat, self.P
+    
+
+    def compute_probability_bound(self, alpha, delta):
+        """
+        Returns the probability bounds for a range of delta values.
+        """
+        I = jnp.eye(self.K.shape[1])  # assuming K is (n x n)
+
+        Sigma = self.sigma_minus
+        K = self.K
+        Lambda = self.in_cov
+        H = jnp.eye(self.dynamics.state_dim) 
+        
+        alphaT_Sigma_alpha = alpha.T @ Sigma @ alpha
+        term1 = jnp.sqrt(2 * alphaT_Sigma_alpha)
+        term2 = jnp.sqrt(2 * alpha.T @ (I - K @ H) @ Sigma @ alpha)
+        xi = erfinv(1 - 2 * delta) * (term1 - term2)
+
+        denominator = jnp.sqrt(2 * alpha.T @ Lambda @ alpha)
+        return 0.5 * (1 - erf(xi / denominator))
+
 
 class GEKF:
     """Continuous-Discrete GEKF"""
@@ -78,16 +112,21 @@ class GEKF:
         self.Q = dynamics.Q # Process noise covariance
         self.R = sigma_v*jnp.eye(dynamics.state_dim) if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
 
+        self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
+        self.sigma_minus = self.P
+
     def predict(self, u):
         """Predict step of EKF."""
         # Nonlinear state propagation
-        self.x_hat = self.x_hat + self.dt * (self.dynamics.f(self.x_hat) + self.dynamics.g(self.x_hat) @ u)
+        self.x_hat = self.x_hat + self.dt * self.dynamics.x_dot(self.x_hat, u)
 
         # Compute Jacobian of dynamics (linearization)
-        F = jax.jacobian(lambda x: self.dynamics.f(x) + self.dynamics.g(x) @ u)(self.x_hat)
+        F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
 
         # Continous covariance udpate
-        P_dot = F @ self.P + self.P@ (F.T) + self.Q
+        # P_dot = F @ self.P + self.P@ (F.T) + self.Q
+        P_dot = (F @ self.P + F.T @ self.P).squeeze() + self.Q
+
         self.P = self.P + P_dot*self.dt
 
     def update(self, z):
@@ -138,7 +177,7 @@ class GEKF:
         
         # Perfect state observation
         h_z = self.x_hat
-        dhdx = jnp.eye(len(self.x_hat))
+        dhdx = jnp.eye(self.dynamics.state_dim)
 
         h_z = (1+mu_u)*h_z
         E = h_z + mu_v
@@ -153,10 +192,35 @@ class GEKF:
         self.K = jnp.matmul(C, jnp.linalg.inv(S))
 
         # Update state estimate
-        self.x_hat = self.x_hat + jnp.matmul(self.K, z - E)
+        # self.x_hat = self.x_hat + jnp.matmul(self.K, z - E)
+        self.x_hat = self.x_hat + jnp.matmul(z - E, self.K)
+
+        # Update Innovation Covariance
+        self.in_cov = self.K @ S @ self.K.T
+
+        self.sigma_minus = self.P # for computing probability bound
 
         # Update covariance
         self.P = self.P - jnp.matmul(self.K, jnp.transpose(C, axes=None))
+
+    def compute_probability_bound(self, alpha, delta):
+        """
+        Returns the probability bounds for a range of delta values.
+        """
+        I = jnp.eye(self.K.shape[1])  # assuming K is (n x n)
+
+        Sigma = self.sigma_minus
+        K = self.K
+        Lambda = self.in_cov
+        H = jnp.eye(self.dynamics.state_dim) 
+        
+        alphaT_Sigma_alpha = alpha.T @ Sigma @ alpha
+        term1 = jnp.sqrt(2 * alphaT_Sigma_alpha)
+        term2 = jnp.sqrt(2 * alpha.T @ (I - K @ H) @ Sigma @ alpha)
+        xi = erfinv(1 - 2 * delta) * (term1 - term2)
+
+        denominator = jnp.sqrt(2 * alpha.T @ Lambda @ alpha)
+        return 0.5 * (1 - erf(xi / denominator))
 
 
     def get_belief(self):
