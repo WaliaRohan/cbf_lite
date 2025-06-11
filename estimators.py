@@ -39,9 +39,10 @@ class EKF:
         # F_x = jax.jacobian(lambda x: x + self.dt * (self.dynamics.f(x) + self.dynamics.g(x) @ u))(self.x_hat)
         F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
 
-        # Discrete covariance update
+        # Covariance udpate  (Page 274, Table 5.1, Optimal and Robust Estimation)
         # self.P = F_x @ self.P @ F_x.T + self.Q
-        P_dot = (F @ self.P + F.T @ self.P).squeeze() + self.Q
+        # P_dot = (F @ self.P + F.T @ self.P).squeeze() + self.Q
+        P_dot = F.squeeze() @ self.P + self.P @ F.squeeze().T + self.Q
         self.P = self.P + P_dot*self.dt
 
     def update(self, z):
@@ -130,9 +131,10 @@ class GEKF:
         # Compute Jacobian of dynamics (linearization)
         F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
 
-        # Continous covariance udpate
+        # Covariance udpate  (Page 274, Table 5.1, Optimal and Robust Estimation)
         # P_dot = F @ self.P + self.P@ (F.T) + self.Q
-        P_dot = (F @ self.P + F.T @ self.P).squeeze() + self.Q
+        # P_dot = (F @ self.P + F.T @ self.P).squeeze() + self.Q
+        P_dot = F.squeeze() @ self.P + self.P @ F.squeeze().T + self.Q
 
         self.P = self.P + P_dot*self.dt
 
@@ -149,25 +151,25 @@ class GEKF:
       
         # Perfect state observation
         h_z = self.x_hat
-        dhdx = jnp.eye(max(self.x_hat.shape)) # change name of this variable
+        dhdx = jnp.eye(self.dynamics.state_dim) # change name of this variable
 
         h_z = h_z.at[mult_state].set(h_z[mult_state] * (1 + mu_u))
         E = h_z + mu_v
 
         C = jnp.matmul(self.P, jnp.transpose(dhdx, axes=None))  # Perform the matrix multiplication
-        C = C.at[mult_state].set((1 + mu_u) * C[mult_state])  # Modify only the specified state
+        C = C.at[mult_state].set(C[mult_state]*(1 + mu_u))  # Modify only the specified state
         
         M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
         
         S = jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx, axes=None)))  # Perform matrix multiplication
-        S = S.at[mult_state].set(jnp.square(1 + mu_u) * S[mult_state])  # Apply (1 + mu_u)^2 to the specified state
-        M = M.at[1, 1].set(jnp.square(sigma_u) * M[1, 1])
+        S = S.at[mult_state].set(S[mult_state]*jnp.square(1 + mu_u))  # Apply (1 + mu_u)^2 to the specified state
+        M = M.at[1, 1].set(M[1, 1]*jnp.square(sigma_u))
         S = S + M + jnp.square(sigma_v)
 
         self.K = jnp.matmul(C, jnp.linalg.inv(S))
 
         # Update state estimate
-        self.x_hat = self.x_hat + jnp.matmul(self.K, z - E)
+        self.x_hat = self.x_hat + jnp.matmul(z - E, self.K)
 
         # Update covariance
         self.P = self.P - jnp.matmul(self.K, jnp.transpose(C, axes=None))
