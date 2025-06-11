@@ -49,9 +49,16 @@ class EKF:
         H_x = jnp.eye(self.dynamics.state_dim)  # Jacobian of measurement model (assuming direct state observation)
         y = z - self.x_hat # Innovation term: note self.x_hat comes from identity observation model
 
-        # Kalman gain
+        # Innovation Covariance
         S = H_x @ self.P @ H_x.T + self.R
-        self.K = self.P @ H_x.T @ linalg.inv(S)
+
+        # Handle degenerate S cases
+        if jnp.linalg.norm(S) < 1e-8:
+            S_inv = jnp.zeros_like(S)
+        else:
+            S_inv = jnp.linalg.pinv(S)
+
+        self.K = self.P @ H_x.T @ S_inv
 
         # Update Innovation Covariance
         self.in_cov = self.K @ S @ self.K.T
@@ -62,7 +69,7 @@ class EKF:
         self.sigma_minus = self.P # for computing probability bound
 
         # Update covariance
-        self.P = (jnp.eye(len(z)) - self.K @ H_x) @ self.P
+        self.P = (jnp.eye(max(z.shape)) - self.K @ H_x) @ self.P
 
     def get_belief(self):
         """Return the current belief (state estimate)."""
@@ -142,7 +149,7 @@ class GEKF:
       
         # Perfect state observation
         h_z = self.x_hat
-        dhdx = jnp.eye(len(self.x_hat)) # change name of this variable
+        dhdx = jnp.eye(max(self.x_hat.shape)) # change name of this variable
 
         h_z = h_z.at[mult_state].set(h_z[mult_state] * (1 + mu_u))
         E = h_z + mu_v

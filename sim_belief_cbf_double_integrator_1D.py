@@ -11,7 +11,8 @@ from cbfs import BeliefCBF
 from cbfs import clf_1D_doubleint as clf
 from dynamics import *
 from estimators import *
-from sensor import noisy_sensor_mult as sensor
+# from sensor import noisy_sensor_mult as sensor
+from sensor import ubiased_noisy_sensor as sensor
 
 # Define simulation parameters
 # dt = 0.001 # Time step
@@ -28,7 +29,6 @@ u_max = 1.0
 wall_x = 5.0
 goal_x = 6.0
 x_init = [1.0, 0.0]
-# x_init = [-3.3885, -21.4]
 
 # Initial state (truth)
 x_true = jnp.array([x_init])  # Start position
@@ -39,14 +39,15 @@ sensor_update_frequency = 0.1 # Hz
 
 dynamics = LinearDoubleIntegrator1D()
 
-# High noise
+# Mean and covariance
 mu_u = 0.1
 sigma_u = jnp.sqrt(0.001)
 
 mu_v = 0.01
 sigma_v = jnp.sqrt(0.0005)
 
-x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v)
+# x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v)
+x_initial_measurement = sensor(x_true, t=0, cov=sigma_v)
 # estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
 estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
@@ -59,7 +60,7 @@ cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
 clf_gain = 50.0 # CLF linear gain
-clf_slack_penalty = 0.005
+clf_slack_penalty = 0.00405
 # clf_slack_penalty = 5
 cbf_gain = 1.0  # CBF linear gain
 
@@ -186,7 +187,9 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # update measurement and estimator belief
     if t > 0 and t%(1/sensor_update_frequency) == 0:
         # obtain current measurement
-        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+        # x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+        # x_measured = sensor(x_true) # for identity sensor
+        x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
 
         if estimator.name == "GEKF":
             estimator.update_1D(x_measured)
@@ -339,8 +342,8 @@ inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 plt.figure(figsize=(10, 10))
 plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
 plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
-plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
+# plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
+# plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
 plt.xlabel("Time Step (s)")
 plt.ylabel("Trace Value")
 plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
