@@ -35,9 +35,16 @@ def clf_1D_doubleint(state, goal):
     # lyap = diff**2 + (diff**2)*x_dot**2
     # lyap = 0.5*(diff**2 + x_dot**2)
     # lyap = (diff + x_dot**2) + x_dot**2
-    LAMBDA = 1
-    MU = 1
-    GAMMA = 5
+
+
+    #  GAMMA: Controls settling time. 
+    # LAMBDA: VERY SENSITIVE! Increasing this value helps reach goal faster. I think it also controls oscillations. This value should be low, around 0.5 - 1.0.
+    #     MU: Helps in convergence to goal when system is near it. Near the goal, the "diff" (see below) might be close to zero. So this
+              # relies on velocity to help the system reach the goal. 
+
+    GAMMA = 475 # 5 
+    LAMBDA = 0.25 # 1
+    MU = 30.0 # 1 
     lyap = (GAMMA*diff + LAMBDA*x_dot)**2 + MU*x_dot**2
 
     return lyap[0]

@@ -11,8 +11,9 @@ from cbfs import BeliefCBF
 from cbfs import clf_1D_doubleint as clf
 from dynamics import *
 from estimators import *
-# from sensor import noisy_sensor_mult as sensor
-from sensor import ubiased_noisy_sensor as sensor
+from sensor import noisy_sensor_mult as sensor
+
+# from sensor import ubiased_noisy_sensor as sensor
 
 # Define simulation parameters
 # dt = 0.001 # Time step
@@ -21,13 +22,13 @@ from sensor import ubiased_noisy_sensor as sensor
 # T = 5
 
 dt = 0.001
-T = 5000 # 5000
+T = 4000 # 5000
 
-u_max = 1.0
+u_max = 6.0
 
 # Obstacle
-wall_x = 5.0
-goal_x = 6.0
+wall_x = 6.0
+goal_x = 7.0
 x_init = [1.0, 0.0]
 
 # Initial state (truth)
@@ -41,15 +42,15 @@ dynamics = LinearDoubleIntegrator1D()
 
 # Mean and covariance
 mu_u = 0.1
-sigma_u = jnp.sqrt(0.001)
+sigma_u = jnp.sqrt(0.01)
 
-mu_v = 0.01
+mu_v = 0.001
 sigma_v = jnp.sqrt(0.0005)
 
-# x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v)
-x_initial_measurement = sensor(x_true, t=0, cov=sigma_v)
-# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
-estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
+# x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
+estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+# estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -60,9 +61,9 @@ cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
 clf_gain = 50.0 # CLF linear gain
-clf_slack_penalty = 0.00405
+clf_slack_penalty = 0.0005
 # clf_slack_penalty = 5
-cbf_gain = 1.0  # CBF linear gain
+cbf_gain = 250.0  # CBF linear gain
 
 # Autodiff: Compute Gradients for CLF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -111,21 +112,21 @@ def solve_qp(b):
 
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 
-        [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
+        # [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
         [1, 0],
         [0, 1]
     ])
 
     u = jnp.hstack([
         (-L_f_V - clf_gain * V).squeeze(),          # CLF constraint
-        (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
+        # (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
         u_max, 
         jnp.inf # no upper limit on slack
     ])
 
     l = jnp.hstack([
         -jnp.inf, # No lower limit on CLF condition
-        -jnp.inf, # No lower limit on CBF condition
+        # -jnp.inf, # No lower limit on CBF condition
         -u_max,
         0.0 # slack can't be negative
     ])
@@ -179,7 +180,6 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
 
     # Apply control to the true state (x_true)
-    # x_true = x_true + dt * (dynamics.f(x_true) + dynamics.g(x_true) @ u_opt)
     x_true = x_true + dt * dynamics.x_dot(x_true, u_opt)
 
     estimator.predict(u_opt)
@@ -187,12 +187,12 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # update measurement and estimator belief
     if t > 0 and t%(1/sensor_update_frequency) == 0:
         # obtain current measurement
-        # x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
         # x_measured = sensor(x_true) # for identity sensor
-        x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
+        # x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
 
         if estimator.name == "GEKF":
-            estimator.update_1D(x_measured)
+            estimator.update(x_measured)
 
         if estimator.name == "EKF":
             estimator.update(x_measured)
@@ -245,7 +245,7 @@ time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 plt.figure(figsize=(10, 10))
 # Position x
 plt.plot(time, x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2, alpha=0.5)
-plt.plot(time, x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=1.5)
+plt.plot(time, x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=1.75)
 plt.plot(time, x_traj[:, 0], color="blue", label="True x", linewidth=2)
 # Velocity v
 plt.plot(time, x_meas[:, 1], color="green", label="Measured v", linestyle="dashdot", linewidth=2, alpha=0.5)
