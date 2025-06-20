@@ -15,16 +15,17 @@ from sensor import noisy_sensor_mult as sensor
 
 # from sensor import ubiased_noisy_sensor as sensor
 
-# Define simulation parameters
-# dt = 0.001 # Time step
-# T = 20 # Number of steps
-# dt = 1
-# T = 5
-
+# Sim Params
 dt = 0.001
-T = 4000 # 5000
+T = 10000*10
+dynamics = LinearDoubleIntegrator1D()
 
-u_max = 6.0
+# Sensor Params
+mu_u = 0.1
+sigma_u = jnp.sqrt(0.01)
+mu_v = 0.001
+sigma_v = jnp.sqrt(0.0005)
+sensor_update_frequency = 0.1 # Hz
 
 # Obstacle
 wall_x = 6.0
@@ -35,17 +36,6 @@ x_init = [1.0, 0.0]
 x_true = jnp.array([x_init])  # Start position
 goal = jnp.array([goal_x])  # Goal position
 obstacle = jnp.array([wall_x])  # Wall
-
-sensor_update_frequency = 0.1 # Hz
-
-dynamics = LinearDoubleIntegrator1D()
-
-# Mean and covariance
-mu_u = 0.1
-sigma_u = jnp.sqrt(0.01)
-
-mu_v = 0.001
-sigma_v = jnp.sqrt(0.0005)
 
 x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
 # x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
@@ -60,10 +50,12 @@ delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
-clf_gain = 50.0 # CLF linear gain
-clf_slack_penalty = 0.0005
-# clf_slack_penalty = 5
-cbf_gain = 250.0  # CBF linear gain
+u_max = 2.0
+clf_gain = 20.0 # CLF linear gain
+clf_slack_penalty = 1000.0
+cbf_gain = 1.0  # CBF linear gain
+
+CBF_ON = True
 
 # Autodiff: Compute Gradients for CLF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -112,24 +104,30 @@ def solve_qp(b):
 
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 
-        # [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
+        [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
         [1, 0],
         [0, 1]
     ])
 
     u = jnp.hstack([
         (-L_f_V - clf_gain * V).squeeze(),          # CLF constraint
-        # (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
+        (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
         u_max, 
         jnp.inf # no upper limit on slack
     ])
 
     l = jnp.hstack([
         -jnp.inf, # No lower limit on CLF condition
-        # -jnp.inf, # No lower limit on CBF condition
+        -jnp.inf, # No lower limit on CBF condition
         -u_max,
         0.0 # slack can't be negative
     ])
+
+    # Remove CBF conditions if CBF is not ON
+    if not CBF_ON:
+        A = jnp.delete(A, 1, axis=0)  # Remove 2nd row
+        u = jnp.delete(u, 1)          # Remove corresponding element in u
+        l = jnp.delete(l, 1)          # Remove corresponding element in l
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
@@ -266,14 +264,14 @@ plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
 plt.title("State Components Over Time: Position and Velocity", fontsize=18)
-plt.grid()
+# plt.grid()
 plt.show()
 
 # # Plot controls
 plt.figure(figsize=(10, 10))
+plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
 plt.plot(time, np.array(cbf_values), color='red', label="CBF")
 plt.plot(time, np.array(clf_values), color='green', label="CLF")
-plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
 plt.xlabel("Time step (s)")
 plt.ylabel("Value")
 plt.title(f"CBF, CLF, and Control Values ({estimator.name})")
@@ -281,6 +279,27 @@ plt.title(f"CBF, CLF, and Control Values ({estimator.name})")
 plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
 # Legend font size
+plt.legend(fontsize=14)
+plt.show()
+
+plt.figure(figsize=(10, 10))
+GAMMA = 1 # 5 
+LAMBDA = 1.0 # 1
+MU = 0.5 # 1 
+x = x_est[:, 0]         # x over time
+x_dot = x_est[:, 1]     # ẋ over time
+diff = x - goal         # x - goal over time
+sum = (GAMMA*diff + LAMBDA*x_dot)**2
+plt.plot(time, np.array(clf_values), color='green', label="CLF")
+plt.plot(time, GAMMA * diff, label="GAMMA * diff", color='blue')
+plt.plot(time, LAMBDA * x_dot, label="LAMBDA * x_dot", color='red')
+plt.plot(time, MU * x_dot**2, label="MU * x_dot^2", color='orange')
+plt.plot(time, sum, label="(GAMMA*diff + LAMBDA*x_dot)**2", color='black')
+plt.xlabel("Time step (s)")
+plt.ylabel("Value")
+plt.title(f"CLF Values ({estimator.name})")
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
 plt.show()
 
@@ -334,22 +353,22 @@ plt.show()
 # plt.legend(fontsize=14)
 # plt.show()
 
-kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-covariance_traces = [jnp.trace(P) for P in covariances]
-inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
+# kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+# covariance_traces = [jnp.trace(P) for P in covariances]
+# inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 
-# # Plot trace of Kalman gains and covariances
-plt.figure(figsize=(10, 10))
-plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-# plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
-# plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
-plt.xlabel("Time Step (s)")
-plt.ylabel("Trace Value")
-plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-plt.legend()
-plt.grid()
-plt.show()
+# # # Plot trace of Kalman gains and covariances
+# plt.figure(figsize=(10, 10))
+# plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+# plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+# # plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
+# # plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
+# plt.xlabel("Time Step (s)")
+# plt.ylabel("Trace Value")
+# plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+# plt.legend()
+# plt.grid()
+# plt.show()
 
 ## Probability of leaving safe set
 
@@ -383,13 +402,18 @@ print(f"Obstacle Position (wall_x): {wall_x}")
 print(f"Goal Position (goal_x): {goal_x}")
 print(f"Initial Position (x_init): {x_init}")
 
-print("\n--- Belief CBF Parameters ---")
-print(f"Failure Probability Threshold (delta): {delta}")
-
 print("\n--- Control Parameters ---")
+print(f"u_max: {u_max}")
 print(f"CLF Linear Gain (clf_gain): {clf_gain}")
 print(f"CLF Slack (clf_slack): {clf_slack_penalty}")
 print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
+if CBF_ON:
+    print("CBF: ON")
+else:
+    print("CBF: OFF")
+
+print("\n--- Belief CBF Parameters ---")
+print(f"Failure Probability Threshold (delta): {delta}")
 
 # Print Metrics
 

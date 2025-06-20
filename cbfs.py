@@ -11,6 +11,26 @@ def vanilla_clf(state, goal):
 def vanilla_clf_x(state, goal):
     return ((state[0] - goal[0])**2).squeeze()
 
+def vanilla_clf_dubins(state, goal):
+    x = state[0]
+    y = state[1]
+    theta = state[2]
+    v = state[3]
+
+    x_dot = v*jnp.cos(theta)
+    y_dot = v*jnp.sin(theta)
+
+    y_d = goal[1]
+
+    Kv = 0.5
+    
+    num = -(Kv/2)*(y_d - y - y_dot) - y*y_dot - y_dot**2
+    den = 1e-6 + y*x_dot
+
+    V = num/den
+
+    return V
+
 def clf_1D_doubleint(state, goal):
     """
     Returns lyapunov function for driving system to goal. This lyapunov function
@@ -42,9 +62,9 @@ def clf_1D_doubleint(state, goal):
     #     MU: Helps in convergence to goal when system is near it. Near the goal, the "diff" (see below) might be close to zero. So this
               # relies on velocity to help the system reach the goal. 
 
-    GAMMA = 475 # 5 
-    LAMBDA = 0.25 # 1
-    MU = 30.0 # 1 
+    GAMMA = 2.4
+    LAMBDA = 1.0
+    MU = 1.0 
     lyap = (GAMMA*diff + LAMBDA*x_dot)**2 + MU*x_dot**2
 
     return lyap[0]
@@ -222,9 +242,7 @@ class BeliefCBF:
             float value: Value of RHS of the inequality above
         
         """        
-        roots = jnp.array([-0.1]) # Manually select root to be in left half plane
-        # polynomial = np.poly1d(roots, r=True)
-        # coeff = jnp.array(polynomial.coeffs)
+        roots = jnp.array([-0.15]) # Manually select root to be in left half plane
         coeff = cbf_gain*jnp.poly(roots)
 
         # jax.debug.print("Value: {}", coeff)
