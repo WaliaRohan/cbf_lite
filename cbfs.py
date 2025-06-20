@@ -11,6 +11,26 @@ def vanilla_clf(state, goal):
 def vanilla_clf_x(state, goal):
     return ((state[0] - goal[0])**2).squeeze()
 
+def vanilla_clf_dubins(state, goal):
+    x = state[0]
+    y = state[1]
+    theta = state[2]
+    v = state[3]
+
+    x_dot = v*jnp.cos(theta)
+    y_dot = v*jnp.sin(theta)
+
+    y_d = goal[1]
+
+    Kv = 0.5
+    
+    num = -(Kv/2)*(y_d - y - y_dot) - y*y_dot - y_dot**2
+    den = 1e-6 + y*x_dot
+
+    V = num/den
+
+    return V
+
 def clf_1D_doubleint(state, goal):
     """
     Returns lyapunov function for driving system to goal. This lyapunov function
