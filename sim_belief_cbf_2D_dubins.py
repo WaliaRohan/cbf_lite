@@ -17,7 +17,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 4000 # 5000
+T = 5000 # 5000
 dynamics = DubinsDynamics()
 
 # Sensor Params
@@ -29,8 +29,8 @@ sensor_update_frequency = 0.1 # Hz
 
 # Obstacle
 wall_x = 6.0
-goal = [0.0, 8.0]
-x_init = [1.0, 4.0, 0.0, 0.0] # x, y, v, theta
+goal = [10.0, 10.0]
+x_init = [1.0, 4.0, 2.0, 0.0] # x, y, v, theta
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
@@ -40,8 +40,8 @@ obstacle = jnp.array([wall_x])  # Wall
 # Mean and covariance
 x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
 # x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -51,7 +51,7 @@ delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
-u_max = 50.0
+u_max = 10.0
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 100.0
 cbf_gain = 1.0  # CBF linear gain
@@ -84,13 +84,13 @@ def solve_qp(b):
     L_g_V = jnp.dot(grad_V_x.T, dynamics.g(x_estimated))
     
     # # Compute CBF components
-    # h = cbf.h_b(b)
-    # L_f_hb, L_g_hb, L_f_2_h, Lg_Lf_h, grad_h_b, f_b = cbf.h_dot_b(b, dynamics) # ∇h(x)
+    h = cbf.h_b(b)
+    L_f_hb, L_g_hb, L_f_2_h, Lg_Lf_h, grad_h_b, f_b = cbf.h_dot_b(b, dynamics) # ∇h(x)
 
-    # L_f_h = L_f_hb
-    # L_g_h = L_g_hb
+    L_f_h = L_f_hb
+    L_g_h = L_g_hb
 
-    # rhs, L_f_h, h_gain = cbf.h_b_r2_RHS(h, L_f_h, L_f_2_h, cbf_gain)
+    rhs, L_f_h, h_gain = cbf.h_b_r2_RHS(h, L_f_h, L_f_2_h, cbf_gain)
 
     # Define Q matrix: Minimize ||u||^2 and slack (penalty*delta^2)
     Q = jnp.array([
@@ -219,7 +219,7 @@ x_est = np.array(x_est).squeeze()
 time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
 # Plot trajectory with y-values set to zero
-plt.figure(figsize=(6, 6))
+plt.figure(figsize=(10, 10))
 plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory")
 plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
 plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
@@ -239,7 +239,7 @@ plt.show()
 # # Plot controls
 plt.figure(figsize=(10, 10))
 # plt.plot(time, np.array(cbf_values), color='red', label="CBF")
-# plt.plot(time, np.array(clf_values), color='green', label="CLF")
+plt.plot(time, np.array(clf_values), color='green', label="CLF")
 plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
 plt.xlabel("Time step (s)")
 plt.ylabel("Value")
@@ -251,8 +251,8 @@ plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
 plt.show()
 
-# Plot CLF (Debug)
-# plt.figure(figsize=(6, 4))
+# # Plot CLF (Debug)
+# plt.figure(figsize=(10, 10))
 # plt.plot(time, np.array(clf_values), color='green', label="CLF")
 # plt.plot(time, list_lgv, color='blue', label="LgV")
 # plt.xlabel("Time step (s)")
@@ -301,22 +301,22 @@ plt.show()
 # plt.legend(fontsize=14)
 # plt.show()
 
-# kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-# covariance_traces = [jnp.trace(P) for P in covariances]
-# inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
+kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+covariance_traces = [jnp.trace(P) for P in covariances]
+inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 
-# # # Plot trace of Kalman gains and covariances
-# plt.figure(figsize=(10, 10))
-# plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-# plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-# # plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
-# # plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
-# plt.xlabel("Time Step (s)")
-# plt.ylabel("Trace Value")
-# plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-# plt.legend()
-# plt.grid()
-# plt.show()
+# # Plot trace of Kalman gains and covariances
+plt.figure(figsize=(10, 10))
+plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+# plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
+# plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
+plt.xlabel("Time Step (s)")
+plt.ylabel("Trace Value")
+plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+plt.legend()
+plt.grid()
+plt.show()
 
 ## Probability of leaving safe set
 

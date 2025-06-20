@@ -22,10 +22,15 @@ def vanilla_clf_dubins(state, goal):
 
     y_d = goal[1]
 
+    yd_dot = y_d - y
+    e_y = yd_dot - y_dot
+
+    lyap = 0.5*e_y**2
+
     Kv = 0.5
     
-    num = -(Kv/2)*(y_d - y - y_dot) - y*y_dot - y_dot**2
-    den = 1e-6 + y*x_dot
+    num = Kv*lyap + (y*y_dot)**2 + y_dot**2
+    den = 1e-6 + (y*x_dot)**2
 
     V = num/den
 
