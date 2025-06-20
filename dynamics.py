@@ -144,6 +144,7 @@ class DubinsDynamics:
     """2D Dubins Car Model with constant velocity and control over heading rate."""
 
     def __init__(self, Q=None):
+        self.name = "Dubins Dynamics"
         self.state_dim = 4
         """Initialize Dubins Car dynamics."""
         if Q is None:
@@ -157,12 +158,14 @@ class DubinsDynamics:
         
         State x = [x_pos, y_pos, theta, v]
         """
-        x_pos, y_pos, theta, v = x
+        theta = x[2]
+        v = x[3]
+        
         return jnp.array([
-            v * jnp.cos(theta),  # x_dot
-            v * jnp.sin(theta),  # y_dot
-            jnp.zeros_like(v),   # v_dot (velocity is constant)
-            jnp.zeros_like(v)    # theta_dot (no drift)
+            [v * jnp.cos(theta)],  # x_dot
+            [v * jnp.sin(theta)],  # y_dot
+            [jnp.zeros_like(v)],   # v_dot (velocity is constant)
+            [jnp.zeros_like(v)]    # theta_dot (no drift)
         ])
 
     def g(self, x):
@@ -179,5 +182,8 @@ class DubinsDynamics:
         ])
 
     def x_dot(self, x, u):
-        return self.f(x) + self.g()@u
+        """Total dynamics: dx/dt = f(x) + g(x)u"""
+
+        # Reshape u to ensure it has atleast 1 column
+        return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
     
