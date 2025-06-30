@@ -94,8 +94,10 @@ class LinearDoubleIntegrator1D:
             self.Q = Q
 
     def f(self, x):
-        """Drift dynamics: f(x)"""
-        x_flat = x.ravel()
+        """
+        x: nx1 column vector ([x, v].T)
+        """
+        x_flat = x.ravel() # for jit compatibility
         x2 = x_flat[1]
         return jnp.array([[x2], [0.0]])  # dx1 = x2, dx2 = 0
 
@@ -110,7 +112,7 @@ class LinearDoubleIntegrator1D:
     def x_dot(self, x, u):
         """Total dynamics: dx/dt = f(x) + g(x)u"""
 
-        # Reshape u to ensure it has atleast 1 column
+        # Reshape u to ensure it has atleast 1 column - for compatibility with sim code
         return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
     
 class NonlinearSingleIntegrator:

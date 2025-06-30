@@ -17,7 +17,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000*10
+T = 10000
 dynamics = LinearDoubleIntegrator1D()
 
 # Sensor Params
