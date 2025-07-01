@@ -25,7 +25,7 @@ mu_u = 0.1
 sigma_u = jnp.sqrt(0.01)
 mu_v = 0.001
 sigma_v = jnp.sqrt(0.0005)
-sensor_update_frequency = 0.1 # Hz
+sensor_update_frequency = 10 # how many sim iterations to skip for sensor measurement
 
 # Obstacle
 wall_x = 6.0
@@ -50,10 +50,10 @@ delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
-u_max = 2.0
+u_max = 5.0
 clf_gain = 20.0 # CLF linear gain
-clf_slack_penalty = 1000.0
-cbf_gain = 1.0  # CBF linear gain
+clf_slack_penalty = 50.0
+cbf_gain = 1.5  # CBF linear gain
 
 CBF_ON = True
 
@@ -183,7 +183,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     estimator.predict(u_opt)
 
     # update measurement and estimator belief
-    if t > 0 and t%(1/sensor_update_frequency) == 0:
+    if t > 0 and t%(sensor_update_frequency) == 0:
         # obtain current measurement
         x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
         # x_measured = sensor(x_true) # for identity sensor
@@ -282,26 +282,26 @@ plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
 plt.show()
 
-plt.figure(figsize=(10, 10))
-GAMMA = 1 # 5 
-LAMBDA = 1.0 # 1
-MU = 0.5 # 1 
-x = x_est[:, 0]         # x over time
-x_dot = x_est[:, 1]     # ẋ over time
-diff = x - goal         # x - goal over time
-sum = (GAMMA*diff + LAMBDA*x_dot)**2
-plt.plot(time, np.array(clf_values), color='green', label="CLF")
-plt.plot(time, GAMMA * diff, label="GAMMA * diff", color='blue')
-plt.plot(time, LAMBDA * x_dot, label="LAMBDA * x_dot", color='red')
-plt.plot(time, MU * x_dot**2, label="MU * x_dot^2", color='orange')
-plt.plot(time, sum, label="(GAMMA*diff + LAMBDA*x_dot)**2", color='black')
-plt.xlabel("Time step (s)")
-plt.ylabel("Value")
-plt.title(f"CLF Values ({estimator.name})")
-plt.xticks(fontsize=14)
-plt.yticks(fontsize=14)
-plt.legend(fontsize=14)
-plt.show()
+# plt.figure(figsize=(10, 10))
+# GAMMA = 1 # 5 
+# LAMBDA = 1.0 # 1
+# MU = 0.5 # 1 
+# x = x_est[:, 0]         # x over time
+# x_dot = x_est[:, 1]     # ẋ over time
+# diff = x - goal         # x - goal over time
+# sum = (GAMMA*diff + LAMBDA*x_dot)**2
+# plt.plot(time, np.array(clf_values), color='green', label="CLF")
+# plt.plot(time, GAMMA * diff, label="GAMMA * diff", color='blue')
+# plt.plot(time, LAMBDA * x_dot, label="LAMBDA * x_dot", color='red')
+# plt.plot(time, MU * x_dot**2, label="MU * x_dot^2", color='orange')
+# plt.plot(time, sum, label="(GAMMA*diff + LAMBDA*x_dot)**2", color='black')
+# plt.xlabel("Time step (s)")
+# plt.ylabel("Value")
+# plt.title(f"CLF Values ({estimator.name})")
+# plt.xticks(fontsize=14)
+# plt.yticks(fontsize=14)
+# plt.legend(fontsize=14)
+# plt.show()
 
 # Plot CLF (Debug)
 # plt.figure(figsize=(6, 4))
@@ -353,22 +353,22 @@ plt.show()
 # plt.legend(fontsize=14)
 # plt.show()
 
-# kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-# covariance_traces = [jnp.trace(P) for P in covariances]
-# inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
+kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+covariance_traces = [jnp.trace(P) for P in covariances]
+inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 
-# # # Plot trace of Kalman gains and covariances
-# plt.figure(figsize=(10, 10))
-# plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-# plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-# # plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
-# # plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
-# plt.xlabel("Time Step (s)")
-# plt.ylabel("Trace Value")
-# plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-# plt.legend()
-# plt.grid()
-# plt.show()
+# # Plot trace of Kalman gains and covariances
+plt.figure(figsize=(10, 10))
+plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+# plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
+# plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
+plt.xlabel("Time Step (s)")
+plt.ylabel("Trace Value")
+plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+plt.legend()
+plt.grid()
+plt.show()
 
 ## Probability of leaving safe set
 
@@ -395,7 +395,7 @@ print(estimator.name)
 print(f"Time Step (dt): {dt}")
 print(f"Number of Steps (T): {T}")
 print(f"Control Input Max (u_max): {u_max}")
-print(f"Sensor Update Frequency (Hz): {sensor_update_frequency}")
+print(f"Sensor Update Frequency (number of iterations): {sensor_update_frequency}")
 
 print("\n--- Environment Setup ---")
 print(f"Obstacle Position (wall_x): {wall_x}")

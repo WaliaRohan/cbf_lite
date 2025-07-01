@@ -239,7 +239,7 @@ class BeliefCBF:
             float value: Value of RHS of the inequality above
         
         """        
-        roots = jnp.array([-1.0]) # Manually select root to be in left half plane
+        roots = jnp.array([-0.75]) # Manually select root to be in left half plane
         coeff = cbf_gain*jnp.poly(roots)
 
         # jax.debug.print("Value: {}", coeff)
