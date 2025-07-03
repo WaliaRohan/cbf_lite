@@ -11,13 +11,12 @@ from cbfs import BeliefCBF
 from cbfs import vanilla_clf_dubins as clf
 from dynamics import *
 from estimators import *
-from sensor import noisy_sensor_mult as sensor
-
-# from sensor import ubiased_noisy_sensor as sensor
+# from sensor import noisy_sensor_mult as sensor
+from sensor import ubiased_noisy_sensor as sensor
 
 # Sim Params
 dt = 0.001
-T = 5000 # 5000
+T = 10000 # 5000
 dynamics = DubinsDynamics()
 
 # Sensor Params
@@ -28,33 +27,33 @@ sigma_v = jnp.sqrt(0.0005)
 sensor_update_frequency = 0.1 # Hz
 
 # Obstacle
-wall_x = 6.0
-goal = [10.0, 10.0]
-x_init = [1.0, 4.0, 2.0, 0.0] # x, y, v, theta
+wall_y = 2.5
+x_init = [0.0, 0.0, 1.0, 0.0] # x, y, v, theta
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
-goal = jnp.array(goal)  # Goal position
-obstacle = jnp.array([wall_x])  # Wall
+goal = 3.0*jnp.array([1.0, 1.0])  # Goal position
+obstacle = jnp.array([wall_y])  # Wall
 
 # Mean and covariance
-x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
-# x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
+# x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
+x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
 # estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
 estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
-alpha = jnp.array([-1.0, 0])
-beta = jnp.array([-wall_x])
+alpha = jnp.array([0.0, -1.0, 0.0, 0.0])
+beta = jnp.array([-wall_y])
 delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # Control params
-u_max = 10.0
+u_max = 5.0
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 100.0
-cbf_gain = 1.0  # CBF linear gain
+cbf_gain = 10.0  # CBF linear gain
+CBF_ON = True
 
 # Autodiff: Compute Gradients for CLF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -103,24 +102,29 @@ def solve_qp(b):
 
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 
-        # [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
+        [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
         [1, 0],
         [0, 1]
     ])
 
     u = jnp.hstack([
         (-L_f_V - clf_gain * V).squeeze(),          # CLF constraint
-        # (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
+        (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
         u_max, 
         jnp.inf # no upper limit on slack
     ])
 
     l = jnp.hstack([
         -jnp.inf, # No lower limit on CLF condition
-        # -jnp.inf, # No lower limit on CBF condition
+        -jnp.inf, # No lower limit on CBF condition
         -u_max,
         0.0 # slack can't be negative
     ])
+
+    if not CBF_ON:
+        A = jnp.delete(A, 1, axis=0)  # Remove 2nd row
+        u = jnp.delete(u, 1)          # Remove corresponding element in u
+        l = jnp.delete(l, 1)          # Remove corresponding element in l
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
@@ -181,9 +185,9 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # update measurement and estimator belief
     if t > 0 and t%(1/sensor_update_frequency) == 0:
         # obtain current measurement
-        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+        # x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
         # x_measured = sensor(x_true) # for identity sensor
-        # x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
+        x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
 
         if estimator.name == "GEKF":
             estimator.update(x_measured)
@@ -223,11 +227,9 @@ plt.figure(figsize=(10, 10))
 plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory")
 plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
 plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
-plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
-
-# # Plot vertical line at x = obstacle[0]
-# plt.axvline(x=obstacle[0], color="r", linestyle="--", label="Obstacle Boundary")
-
+plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
+plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
+# plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
 plt.xlabel("x", fontsize=14)
 plt.ylabel("y", fontsize=14)
 plt.title("2D X-Trajectory (CLF-CBF QP-Controlled)", fontsize=14)
@@ -235,11 +237,10 @@ plt.legend()
 plt.grid()
 plt.show()
 
-
 # # Plot controls
 plt.figure(figsize=(10, 10))
 # plt.plot(time, np.array(cbf_values), color='red', label="CBF")
-plt.plot(time, np.array(clf_values), color='green', label="CLF")
+# plt.plot(time, np.array(clf_values), color='green', label="CLF")
 plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
 plt.xlabel("Time step (s)")
 plt.ylabel("Value")
@@ -251,19 +252,19 @@ plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
 plt.show()
 
-# # Plot CLF (Debug)
-# plt.figure(figsize=(10, 10))
-# plt.plot(time, np.array(clf_values), color='green', label="CLF")
+# Plot CLF (Debug)
+plt.figure(figsize=(10, 10))
+plt.plot(time, np.array(clf_values), color='green', label="CLF")
 # plt.plot(time, list_lgv, color='blue', label="LgV")
-# plt.xlabel("Time step (s)")
-# plt.ylabel("Value")
-# plt.title(f"[Debug] CLF and LgV values ({estimator.name})")
-# # Tick labels font size
-# plt.xticks(fontsize=14)
-# plt.yticks(fontsize=14)
-# # Legend font size
-# plt.legend(fontsize=14)
-# plt.show()
+plt.xlabel("Time step (s)")
+plt.ylabel("Value")
+plt.title(f"[Debug] CLF and LgV values ({estimator.name})")
+# Tick labels font size
+plt.xticks(fontsize=14)
+plt.yticks(fontsize=14)
+# Legend font size
+plt.legend(fontsize=14)
+plt.show()
 
 # # Plot CBF (Debug)
 
@@ -323,7 +324,7 @@ plt.show()
 
 # # Plot distance from obstacle
 
-# dist = wall_x - x_est
+# dist = wall_y - x_est
 
 # plt.figure(figsize=(10, 10))
 # plt.plot(time, dist[:, 0], color="red", linestyle="dashed")
@@ -346,7 +347,7 @@ print(f"Control Input Max (u_max): {u_max}")
 print(f"Sensor Update Frequency (Hz): {sensor_update_frequency}")
 
 print("\n--- Environment Setup ---")
-print(f"Obstacle Position (wall_x): {wall_x}")
+print(f"Obstacle Position (wall_y): {wall_y}")
 print(f"Goal Position (goal_x): {goal}")
 print(f"Initial Position (x_init): {x_init}")
 
@@ -362,13 +363,13 @@ print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
 
 print("\n--- Results ---")
 
-print("Number of estimate exceedances: ", np.sum(x_est > wall_x))
-print("Number of true exceedences", np.sum(x_traj > wall_x))
+print("Number of estimate exceedances: ", np.sum(x_est > wall_y))
+print("Number of true exceedences", np.sum(x_traj > wall_y))
 print("Max estimate value: ", np.max(x_est))
 print("Max true value: ", np.max(x_traj))
-print("Mean true distance from obstacle: ", np.mean(wall_x - x_est))
+print("Mean true distance from obstacle: ", np.mean(wall_y - x_est))
 print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
-print("Cummulative distance to goal: ", np.sum(np.abs(x_traj - wall_x)))
+print("Cummulative distance to goal: ", np.sum(np.abs(x_traj - wall_y)))
 print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2)))
 
 

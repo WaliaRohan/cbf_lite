@@ -1,6 +1,5 @@
 import jax.numpy as jnp
 
-
 class SingleIntegrator1D:
     """1D Single Integrator Dynamics with Drift: dx/dt = a * x + u"""
     
@@ -156,16 +155,16 @@ class DubinsDynamics:
         """
         Compute the drift dynamics f(x).
         
-        State x = [x_pos, y_pos, theta, v]
+        State x = [x_pos, y_pos, v, theta]
         """
-        theta = x[2]
-        v = x[3]
+        v = x[2]
+        theta = x[3]
         
         return jnp.array([
             [v * jnp.cos(theta)],  # x_dot
             [v * jnp.sin(theta)],  # y_dot
             [jnp.zeros_like(v)],   # v_dot (velocity is constant)
-            [jnp.zeros_like(v)]    # theta_dot (no drift)
+            [jnp.zeros_like(theta)]    # theta_dot (no drift)
         ])
 
     def g(self, x):
