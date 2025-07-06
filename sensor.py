@@ -85,7 +85,24 @@ def ubiased_noisy_sensor(x, t, cov, key=None):
 
     return new_x
 
-def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
+def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, mult_state, key=None):
+    """
+    Returns sensor measurement with multiplicative and additive biased guassian
+    noise. 
+
+    Args:
+        x (float, vector): State vector
+        t (int): simulation iteration
+        mu_u (float): mean of mult noise
+        sigma_u (float): std of mult noise
+        mu_v (float): mean of additive noise
+        sigma_v (float): std of additive noise
+        mult_state (int): index of state affected by multiplicative noise
+        key (float, optional): Randomization key
+
+    Returns:
+        _type_: _description_
+    """
 
     if key is None:
         key = random.PRNGKey(0)
@@ -94,7 +111,8 @@ def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
 
     # Calculate the dimension of the random vector
     # dim = len(x)
-    dim = max(x.shape)
+    # dim = max(x.shape)
+    dim = 1 # replace this later when mult_state is a list
 
     # Generate a zero-mean Gaussian random vector with unit variance
     # (take n_initial_meas measurements at t = 0)
@@ -110,20 +128,19 @@ def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
         normal_samples_2 = normal_samples_2.at[ii, :].set(random.normal(subkey2, shape=(dim,)))
 
     # Apply Cholesky decomposition to convert the unit variance vector to the desired covariance matrix
-    chol_u = get_chol(sigma_u, dim)
-    chol_v = get_chol(sigma_v, dim)
+    chol_u = get_chol(sigma_u**2, dim)
+    chol_v = get_chol(sigma_v**2, dim)
 
     u_vector = 1 + mu_u + jnp.mean(jnp.dot(chol_u, normal_samples.T), axis=1)
     v_vector = mu_v + jnp.mean(jnp.dot(chol_v, normal_samples_2.T), axis=1)
 
-    # new_x stores sensor measurement
-    new_x = x
+    # # new_x stores sensor measurement
+    # new_x = x
 
-    # Add multiplicative noise to second state
-    mult_state = 0
-    if not jnp.isnan(jnp.mean(u_vector)):
-        new_x = x.at[mult_state].set(x[mult_state]*jnp.mean(u_vector))
+    # # Add multiplicative noise to second state
+    # if not jnp.isnan(jnp.mean(u_vector)):
+    #     new_x = x.at[mult_state].set(x[mult_state]*jnp.mean(u_vector))
 
-    new_x = new_x + v_vector # add biased gaussian noise
+    # new_x = new_x + v_vector # add biased gaussian noise
 
-    return new_x
+    return x[mult_state]*jnp.mean(u_vector) + v_vector

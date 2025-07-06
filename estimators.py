@@ -12,7 +12,7 @@ from openpyxl import load_workbook
 class EKF:
     """Discrete EKF"""
     
-    def __init__(self, dynamics, dt, x_init=None, P_init=None, Q=None, R=None):
+    def __init__(self, dynamics, dt, h = None, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
         self.dt = dt  # Time step
         self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim))
@@ -28,6 +28,12 @@ class EKF:
 
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
         self.sigma_minus = self.P
+
+        # Initialize observation function as identity function
+        if h is None:
+            self.h = lambda x: x
+        else:
+            self.h = h
 
     def predict(self, u):
         """Predict step of EKF."""
@@ -46,12 +52,21 @@ class EKF:
         self.P = self.P + P_dot*self.dt
 
     def update(self, z):
-        """Measurement update step of EKF."""
-        H_x = jnp.eye(self.dynamics.state_dim)  # Jacobian of measurement model (assuming direct state observation)
-        y = z - self.x_hat # Innovation term: note self.x_hat comes from identity observation model
+        """
+        Measurement update step of EKF
+
+        Args:
+            z (): Measurement
+        """
+        # H_x Jacobian of measurement function wrt state vector (identity for full state observation)
+        # H_x = jnp.array([[0.0, 1.0, 0.0, 0.0]])# can only observe y
+
+        H_x = jax.jacfwd(self.h)(self.x_hat)
+        y = z - self.h(self.x_hat) # Innovation term: note self.x_hat comes from identity observation model
 
         # Innovation Covariance
-        S = H_x @ self.P @ H_x.T + self.R
+        obs_dim = len(H_x) # Number of rows in H_X == observation space dim
+        S = H_x @ self.P @ H_x.T + self.R[:obs_dim, :obs_dim]# self.
 
         # Handle degenerate S cases
         if jnp.linalg.norm(S) < 1e-8:
@@ -65,7 +80,7 @@ class EKF:
         self.in_cov = self.K @ S @ self.K.T
 
         # Update state estimate
-        self.x_hat = self.x_hat + y @ self.K
+        self.x_hat = self.x_hat + self.K@y
 
         self.sigma_minus = self.P # for computing probability bound
 

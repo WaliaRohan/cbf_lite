@@ -11,19 +11,19 @@ from cbfs import BeliefCBF
 from cbfs import vanilla_clf_dubins as clf
 from dynamics import *
 from estimators import *
-# from sensor import noisy_sensor_mult as sensor
-from sensor import ubiased_noisy_sensor as sensor
+from sensor import noisy_sensor_mult as sensor
+# from sensor import ubiased_noisy_sensor as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000 # 5000
+T = 5000 # 5000
 dynamics = DubinsDynamics()
 
 # Sensor Params
 mu_u = 0.1
-sigma_u = jnp.sqrt(0.01)
+sigma_u = jnp.sqrt(0.01) # Standard deviation
 mu_v = 0.001
-sigma_v = jnp.sqrt(0.0005)
+sigma_v = jnp.sqrt(0.0005) # Standard deviation
 sensor_update_frequency = 0.1 # Hz
 
 # Obstacle
@@ -36,10 +36,14 @@ goal = 3.0*jnp.array([1.0, 1.0])  # Goal position
 obstacle = jnp.array([wall_y])  # Wall
 
 # Mean and covariance
-# x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
-x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
+x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v, mult_state=1) # mult_noise
+x_initial_measurement = x_true                                                                             # TODO: THIS IS WRONG. ONLY DID THIS FOR TESTING EKF/GEKF WITH PARTIAL STATE OBSERVATION
+# x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
+# Observation function: Return second and 4rth element of the state vector
+# self.h = lambda x: x[jnp.array([1, 3])]
+h = lambda x: jnp.array([x[1]])
 # estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
-estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -185,9 +189,9 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # update measurement and estimator belief
     if t > 0 and t%(1/sensor_update_frequency) == 0:
         # obtain current measurement
-        # x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v, mult_state=1)
         # x_measured = sensor(x_true) # for identity sensor
-        x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
+        # x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
 
         if estimator.name == "GEKF":
             estimator.update(x_measured)
@@ -217,14 +221,14 @@ x_traj = jnp.array(x_traj)
 
 # Convert to numpy arrays for plotting
 x_traj = np.array(x_traj).squeeze()
-x_meas = np.array(x_meas).squeeze()
+# x_meas = np.array(x_meas).squeeze()
 x_est = np.array(x_est).squeeze()
 
 time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
 # Plot trajectory with y-values set to zero
 plt.figure(figsize=(10, 10))
-plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory")
+# plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory")
 plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
 plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
 plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
