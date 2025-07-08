@@ -141,8 +141,6 @@ class GEKF:
     def update(self, z):
         """Measurement update step of EKF."""
         """z: measurement"""
-        mult_state = 0
-
         mu_u = self.mu_u
         sigma_u = self.sigma_u
 
@@ -153,17 +151,14 @@ class GEKF:
         h_z = self.x_hat
         dhdx = jnp.eye(self.dynamics.state_dim) # change name of this variable
 
-        h_z = h_z.at[mult_state].set(h_z[mult_state] * (1 + mu_u))
+        h_z =  (1 + mu_u)*h_z
         E = h_z + mu_v
 
-        C = jnp.matmul(self.P, jnp.transpose(dhdx, axes=None))  # Perform the matrix multiplication
-        C = C.at[mult_state].set(C[mult_state]*(1 + mu_u))  # Modify only the specified state
+        C = (1 + mu_u)*jnp.matmul(self.P, jnp.transpose(dhdx, axes=None))  # Perform the matrix multiplication
         
-        M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
+        M = jnp.square(sigma_u)*jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
         
-        S = jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx, axes=None)))  # Perform matrix multiplication
-        S = S.at[mult_state].set(S[mult_state]*jnp.square(1 + mu_u))  # Apply (1 + mu_u)^2 to the specified state
-        M = M.at[1, 1].set(M[1, 1]*jnp.square(sigma_u))
+        S = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx, axes=None)))  # Perform matrix multiplication
         S = S + M + jnp.square(sigma_v)
 
         self.K = jnp.matmul(C, jnp.linalg.inv(S))

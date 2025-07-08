@@ -11,12 +11,12 @@ from cbfs import BeliefCBF
 from cbfs import vanilla_clf_dubins as clf
 from dynamics import *
 from estimators import *
-# from sensor import noisy_sensor_mult as sensor
-from sensor import ubiased_noisy_sensor as sensor
+from sensor import noisy_sensor_mult as sensor
+# from sensor import ubiased_noisy_sensor as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000 # 5000
+T = 10000
 dynamics = DubinsDynamics()
 
 # Sensor Params
@@ -36,10 +36,10 @@ goal = 3.0*jnp.array([1.0, 1.0])  # Goal position
 obstacle = jnp.array([wall_y])  # Wall
 
 # Mean and covariance
-# x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
-x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
-# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
-estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
+# x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
+estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+# estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -185,9 +185,9 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # update measurement and estimator belief
     if t > 0 and t%(1/sensor_update_frequency) == 0:
         # obtain current measurement
-        # x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
+        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
         # x_measured = sensor(x_true) # for identity sensor
-        x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
+        # x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
 
         if estimator.name == "GEKF":
             estimator.update(x_measured)

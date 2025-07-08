@@ -76,7 +76,7 @@ def ubiased_noisy_sensor(x, t, cov, key=None):
     # Apply Cholesky decomposition to convert the unit variance vector to the desired covariance matrix
     # If Σ is a covariance matrix, then z=L⋅standard normal vector gives a sample with covariance Σ.
 
-    chol_v = get_chol(cov, dim)
+    chol_v = get_chol(cov**2, dim)
     v_vector = jnp.mean(jnp.dot(chol_v, normal_samples.T), axis=1).reshape(x.shape)
 
     # new_x stores sensor measurement
@@ -110,8 +110,8 @@ def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
         normal_samples_2 = normal_samples_2.at[ii, :].set(random.normal(subkey2, shape=(dim,)))
 
     # Apply Cholesky decomposition to convert the unit variance vector to the desired covariance matrix
-    chol_u = get_chol(sigma_u, dim)
-    chol_v = get_chol(sigma_v, dim)
+    chol_u = get_chol(sigma_u**2, dim)
+    chol_v = get_chol(sigma_v**2, dim)
 
     u_vector = 1 + mu_u + jnp.mean(jnp.dot(chol_u, normal_samples.T), axis=1)
     v_vector = mu_v + jnp.mean(jnp.dot(chol_v, normal_samples_2.T), axis=1)
@@ -120,10 +120,10 @@ def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
     new_x = x
 
     # Add multiplicative noise to second state
-    mult_state = 0
-    if not jnp.isnan(jnp.mean(u_vector)):
-        new_x = x.at[mult_state].set(x[mult_state]*jnp.mean(u_vector))
+    # mult_state = 0
+    # if not jnp.isnan(jnp.mean(u_vector)):
+    #     new_x = x.at[mult_state].set(x[mult_state]*jnp.mean(u_vector))
 
-    new_x = new_x + v_vector # add biased gaussian noise
+    new_x = jnp.mean(u_vector)*new_x + v_vector
 
     return new_x
