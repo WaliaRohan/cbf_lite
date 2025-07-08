@@ -423,9 +423,11 @@ print("Number of estimate exceedances: ", np.sum(x_est > wall_x))
 print("Number of true exceedences", np.sum(x_traj > wall_x))
 print("Max estimate value: ", np.max(x_est))
 print("Max true value: ", np.max(x_traj))
-print("Mean true distance from obstacle: ", np.mean(wall_x - x_est))
+print("Mean est distance from obstacle: ", np.mean(wall_x - x_est))
+print("Mean true distance from obstacle: ", np.mean(wall_x - x_traj))
+print("Mean est distance from goal: ", np.mean(goal_x - x_est))
+print("Mean true distance from goal: ", np.mean(goal_x - x_traj))
 print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
-print("Cummulative distance to goal: ", np.sum(np.abs(x_traj - wall_x)))
 print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2)))
 
 
