@@ -1,7 +1,8 @@
 import jax.numpy as jnp
 import numpy as np
-from jax import random
-
+from jax import random, jit, lax
+from functools import partial
+import jax
 
 def identity_sensor(x_true):
     return x_true
@@ -32,12 +33,18 @@ def get_chol(cov, dim):
 
     cov_matrix = cov * jnp.eye(dim)
 
-    if jnp.trace(abs(cov_matrix)) > 0:
-        chol = jnp.linalg.cholesky(cov_matrix)
-    else:
-        chol = jnp.zeros(cov_matrix.shape)
+    # if jnp.trace(abs(cov_matrix)) > 0:
+    #     chol = jnp.linalg.cholesky(cov_matrix)
+    # else:
+    #     chol = jnp.zeros(cov_matrix.shape)
 
-    return chol
+    # return chol
+
+    return lax.cond(
+    jnp.trace(jnp.abs(cov_matrix)) > 0,
+    lambda _: jnp.linalg.cholesky(cov_matrix),
+    lambda _: jnp.eye(dim),
+    operand=None)
 
 def ubiased_noisy_sensor(x, t, cov, key=None):
     """
@@ -85,6 +92,7 @@ def ubiased_noisy_sensor(x, t, cov, key=None):
 
     return new_x
 
+@partial(jit, static_argnums=1, device=jax.devices("cpu")[0])
 def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
 
     if key is None:
@@ -100,14 +108,24 @@ def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
     # (take n_initial_meas measurements at t = 0)
     n_initial_meas = 10
     max_iter = n_initial_meas if t == 0 else 1
-    normal_samples = jnp.zeros((max_iter, dim))
-    normal_samples_2 = jnp.zeros((max_iter, dim))
-    
-    for ii in range(max_iter):
-        key, subkey = random.split(key)
-        key, subkey2 = random.split(key)
-        normal_samples = normal_samples.at[ii, :].set(random.normal(subkey, shape=(dim,)))
-        normal_samples_2 = normal_samples_2.at[ii, :].set(random.normal(subkey2, shape=(dim,)))
+    # normal_samples = jnp.zeros((max_iter, dim))
+    # normal_samples_2 = jnp.zeros((max_iter, dim))
+
+    # for ii in range(max_iter):
+    #     key, subkey = random.split(key)
+    #     key, subkey2 = random.split(key)
+    #     normal_samples = normal_samples.at[ii, :].set(random.normal(subkey, shape=(dim,)))
+    #     normal_samples_2 = normal_samples_2.at[ii, :].set(random.normal(subkey2, shape=(dim,)))
+
+    # Creating keys in one go
+    keys = random.split(key, max_iter * 2)
+    # Split into two halves
+    keys_u = keys[:max_iter]
+    keys_v = keys[max_iter:]
+
+    # Generate noise vectors using vmap
+    normal_samples  = jax.vmap(lambda k: random.normal(k, shape=(dim,)))(keys_u)
+    normal_samples_2 = jax.vmap(lambda k: random.normal(k, shape=(dim,)))(keys_v)
 
     # Apply Cholesky decomposition to convert the unit variance vector to the desired covariance matrix
     chol_u = get_chol(sigma_u**2, dim)
@@ -119,10 +137,29 @@ def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
     # new_x stores sensor measurement
     new_x = x
 
-    # Add multiplicative noise to second state
+    # Add multiplicative noise
     mult_state = 0
-    if not jnp.isnan(jnp.mean(u_vector)):
-        new_x = x.at[mult_state].set(x[mult_state]*jnp.mean(u_vector))
+    # if not jnp.isnan(jnp.mean(u_vector)):
+    #     new_x = x.at[mult_state].set(x[mult_state]*jnp.mean(u_vector))
+
+    # new_x = lax.cond(
+    #     jnp.isnan(jnp.mean(u_vector))
+    # )
+
+    u_mean = jnp.mean(u_vector)
+
+    def apply_noise(x):
+        return x.at[mult_state].set(x[mult_state] * u_mean)
+
+    def skip_noise(x):
+        return x
+
+    new_x = lax.cond(
+        jnp.isnan(u_mean),
+        skip_noise,
+        apply_noise,
+        operand=x
+    )
 
     new_x = new_x + v_vector # add biased gaussian noise
 
