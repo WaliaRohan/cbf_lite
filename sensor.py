@@ -39,14 +39,14 @@ def get_chol(cov, dim):
 
     return chol
 
-def ubiased_noisy_sensor(x, t, cov, key=None):
+def ubiased_noisy_sensor(x, t, std, key=None):
     """
     Applies additive zero-mean gaussian noise to true state value
 
     Args:
         x (array): true state
         t (int): simulation time step
-        cov (float): Covariance of additive noise
+        std (float): Std of additive noise
         key (int, optional): Key for random samples. Defaults to None.
 
     Returns:
@@ -76,7 +76,7 @@ def ubiased_noisy_sensor(x, t, cov, key=None):
     # Apply Cholesky decomposition to convert the unit variance vector to the desired covariance matrix
     # If Σ is a covariance matrix, then z=L⋅standard normal vector gives a sample with covariance Σ.
 
-    chol_v = get_chol(cov**2, dim)
+    chol_v = get_chol(std**2, dim)
     v_vector = jnp.mean(jnp.dot(chol_v, normal_samples.T), axis=1).reshape(x.shape)
 
     # new_x stores sensor measurement
