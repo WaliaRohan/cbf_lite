@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 def getSimParams():
     sim_params = {
     "dt": 0.001,
-    "T": 10000,
+    "T": 5000,
     "dynamics": LinearDoubleIntegrator1D(),
     "wall_x": 6.0,
     "goal_x": 7.0,
@@ -34,10 +34,10 @@ def getSimParams():
     }
 
     control_params = {
-        "u_max": 10.0,
+        "u_max": 5.0,
         "clf_gain": 20.0,
-        "clf_slack_penalty": 1.0,
-        "cbf_gain": 5.0,
+        "clf_slack_penalty": 0.01,
+        "cbf_gain": 2.5,
         "CBF_ON": True
     }
 

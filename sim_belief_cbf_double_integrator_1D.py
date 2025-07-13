@@ -12,12 +12,13 @@ from cbfs import clf_1D_doubleint as clf
 from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
+# from sensor import ubiased_noisy_sensor as sensor
 
 # from sensor import ubiased_noisy_sensor as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000
+T = 5000
 dynamics = LinearDoubleIntegrator1D()
 
 # Sensor Params
@@ -38,9 +39,9 @@ goal = jnp.array([goal_x])  # Goal position
 obstacle = jnp.array([wall_x])  # Wall
 
 x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
-# x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+# x_initial_measurement = sensor(x_true, t=0, std=sigma_v) # unbiased_fixed_noise
+# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -52,8 +53,8 @@ cbf = BeliefCBF(alpha, beta, delta, n)
 # Control params
 u_max = 5.0
 clf_gain = 20.0 # CLF linear gain
-clf_slack_penalty = 50.0
-cbf_gain = 1.5  # CBF linear gain
+clf_slack_penalty = 0.01
+cbf_gain = 2.5  # CBF linear gain
 
 CBF_ON = True
 

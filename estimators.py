@@ -12,10 +12,10 @@ from openpyxl import load_workbook
 class EKF:
     """Discrete EKF"""
     
-    def __init__(self, dynamics, dt, x_init=None, P_init=None, Q=None, R=None):
+    def __init__(self, dynamics, dt, x_init=None, P_init=None, R=None):
         self.dynamics = dynamics  # System dynamics model
         self.dt = dt  # Time step
-        self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim))
+        self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim))  # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
         self.name = "EKF"
 
         # Initialize belief (state estimate)
@@ -158,7 +158,7 @@ class GEKF:
       
         # Perfect state observation
         h_z = self.x_hat
-        dhdx = jnp.eye(self.dynamics.state_dim) # change name of this variable
+        dhdx = jnp.eye(self.dynamics.state_dim)
 
         E = (1 + mu_u)*h_z + mu_v # This is the "observation function output" for GEKF
 
@@ -166,16 +166,16 @@ class GEKF:
         
         M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
         
-        S_term_1 = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx, axes=None)))  # Perform matrix multiplication
+        S_term_1 = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx)))  # Perform matrix multiplication
         S = S_term_1 + jnp.square(sigma_u)*M + self.R
 
         self.K = jnp.matmul(C, jnp.linalg.inv(S))
 
         # Update state estimate
-        self.x_hat = self.x_hat + jnp.transpose(jnp.matmul(self.K, jnp.transpose(z - E)))
+        self.x_hat = self.x_hat + jnp.transpose(jnp.matmul(self.K, jnp.transpose(z - E))) # double transpose because of how state is defined.
 
         # Update covariance
-        self.P = self.P - jnp.matmul(self.K, jnp.transpose(C, axes=None))
+        self.P = self.P - jnp.matmul(self.K, jnp.transpose(C))
 
     # def update_1D(self, z):
     #     """Measurement update step of EKF."""
