@@ -36,7 +36,7 @@ def getSimParams():
     control_params = {
         "u_max": 5.0,
         "clf_gain": 20.0,
-        "clf_slack_penalty": 0.01,
+        "clf_slack_penalty": 50.0,
         "cbf_gain": 2.5,
         "CBF_ON": True
     }

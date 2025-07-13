@@ -53,7 +53,7 @@ cbf = BeliefCBF(alpha, beta, delta, n)
 # Control params
 u_max = 5.0
 clf_gain = 20.0 # CLF linear gain
-clf_slack_penalty = 0.01
+clf_slack_penalty = 50.0
 cbf_gain = 2.5  # CBF linear gain
 
 CBF_ON = True
