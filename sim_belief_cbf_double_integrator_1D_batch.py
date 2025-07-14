@@ -13,10 +13,15 @@ from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
 
+# For logging results
+import os
+from datetime import datetime
+import json
+
 def getSimParams():
     sim_params = {
     "dt": 0.001,
-    "T": 5000,
+    "T": 10000,
     "dynamics": LinearDoubleIntegrator1D(),
     "wall_x": 6.0,
     "goal_x": 7.0,
@@ -30,7 +35,7 @@ def getSimParams():
         "sigma_u": jnp.sqrt(0.01), # std deviation
         "mu_v": 0.001,
         "sigma_v": jnp.sqrt(0.0005), # std deviation
-        "sensor_update_frequency": 10,
+        "sensor_update_frequency": 100,
     }
 
     control_params = {
@@ -82,9 +87,9 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     goal = jnp.array([goal_x])  # Goal position
 
     if sensor.__name__ == "noisy_sensor_mult":
-        x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
+        x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v, key=key) # mult_noise
     elif sensor.__name__ == "unbiased_noisy_sensor":
-        x_initial_measurement = sensor(x_true, t=0, std=sigma_v) # unbiased_fixed_noise
+        x_initial_measurement = sensor(x_true, t=0, std=sigma_v, key=key) # unbiased_fixed_noise
 
     if estimator_type == "EKF":
         estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
@@ -221,9 +226,9 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
         if t > 0 and t%(sensor_update_frequency) == 0:
             # obtain current measurement
             if sensor.__name__ == "noisy_sensor_mult":
-                x_measured = sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)        
+                x_measured = sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v, key=key)        
             elif sensor.__name__ == "unbiased_noisy_sensor":
-                x_measured = sensor(x_true, t, sigma_v) # unbiased_fixed_noise
+                x_measured = sensor(x_true, t, sigma_v, key=key) # unbiased_fixed_noise
 
             if estimator.name == "GEKF":
                 estimator.update(x_measured)
@@ -253,57 +258,57 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     x_meas = np.array(x_meas).squeeze()
     x_est = np.array(x_est).squeeze()
 
-    time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
+    # time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
-    # Second figure: X component comparison
-    plt.figure(figsize=(10, 10))
-    # Position x
-    plt.plot(time, x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2, alpha=0.5)
-    plt.plot(time, x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=1.75)
-    plt.plot(time, x_traj[:, 0], color="blue", label="True x", linewidth=2)
-    # Velocity v
-    plt.plot(time, x_meas[:, 1], color="green", label="Measured v", linestyle="dashdot", linewidth=2, alpha=0.5)
-    plt.plot(time, x_est[:, 1], color="orange", label="Estimated v", linestyle="dotted", linewidth=1.5)
-    plt.plot(time, x_traj[:, 1], color="blue", label="True v", linestyle="solid", linewidth=1)
-    # Add horizontal lines
-    plt.axhline(y=wall_x, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
-    plt.axhline(y=goal_x, color="purple", linestyle="dashed", linewidth=1, label="Goal")
-    plt.xlabel("Time step (s)", fontsize=16)
-    plt.ylabel("State value", fontsize=16)
-    plt.xticks(fontsize=14)
-    plt.yticks(fontsize=14)
-    plt.legend(fontsize=14)
-    plt.title("State Components Over Time: Position and Velocity", fontsize=18)
-    plt.show()
+    # # Second figure: X component comparison
+    # plt.figure(figsize=(10, 10))
+    # # Position x
+    # plt.plot(time, x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2, alpha=0.5)
+    # plt.plot(time, x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=1.75)
+    # plt.plot(time, x_traj[:, 0], color="blue", label="True x", linewidth=2)
+    # # Velocity v
+    # plt.plot(time, x_meas[:, 1], color="green", label="Measured v", linestyle="dashdot", linewidth=2, alpha=0.5)
+    # plt.plot(time, x_est[:, 1], color="orange", label="Estimated v", linestyle="dotted", linewidth=1.5)
+    # plt.plot(time, x_traj[:, 1], color="blue", label="True v", linestyle="solid", linewidth=1)
+    # # Add horizontal lines
+    # plt.axhline(y=wall_x, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
+    # plt.axhline(y=goal_x, color="purple", linestyle="dashed", linewidth=1, label="Goal")
+    # plt.xlabel("Time step (s)", fontsize=16)
+    # plt.ylabel("State value", fontsize=16)
+    # plt.xticks(fontsize=14)
+    # plt.yticks(fontsize=14)
+    # plt.legend(fontsize=14)
+    # plt.title("State Components Over Time: Position and Velocity", fontsize=18)
+    # plt.show()
 
-    # # Plot controls
-    plt.figure(figsize=(10, 10))
-    plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
-    plt.plot(time, np.array(cbf_values), color='red', label="CBF")
-    plt.plot(time, np.array(clf_values), color='green', label="CLF")
-    plt.xlabel("Time step (s)")
-    plt.ylabel("Value")
-    plt.title(f"CBF, CLF, and Control Values ({estimator.name})")
-    # Tick labels font size
-    plt.xticks(fontsize=14)
-    plt.yticks(fontsize=14)
-    # Legend font size
-    plt.legend(fontsize=14)
-    plt.show()
+    # # # Plot controls
+    # plt.figure(figsize=(10, 10))
+    # plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
+    # plt.plot(time, np.array(cbf_values), color='red', label="CBF")
+    # plt.plot(time, np.array(clf_values), color='green', label="CLF")
+    # plt.xlabel("Time step (s)")
+    # plt.ylabel("Value")
+    # plt.title(f"CBF, CLF, and Control Values ({estimator.name})")
+    # # Tick labels font size
+    # plt.xticks(fontsize=14)
+    # plt.yticks(fontsize=14)
+    # # Legend font size
+    # plt.legend(fontsize=14)
+    # plt.show()
 
-    kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-    covariance_traces = [jnp.trace(P) for P in covariances]
+    # kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+    # covariance_traces = [jnp.trace(P) for P in covariances]
 
-    # # Plot trace of Kalman gains and covariances
-    plt.figure(figsize=(10, 10))
-    plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-    plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-    plt.xlabel("Time Step (s)")
-    plt.ylabel("Trace Value")
-    plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-    plt.legend()
-    plt.grid()
-    plt.show()
+    # # # Plot trace of Kalman gains and covariances
+    # plt.figure(figsize=(10, 10))
+    # plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+    # plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+    # plt.xlabel("Time Step (s)")
+    # plt.ylabel("Trace Value")
+    # plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+    # plt.legend()
+    # plt.grid()
+    # plt.show()
 
     # Define Metrics
     metrics = {
@@ -402,15 +407,53 @@ def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
     print(f"beta: {beta}")
     print(f"Failure Probability Threshold (delta): {delta}")
 
+start_idx = 1
+end_idx = 50
+
+save_freq = 25
+base_path = "/home/speedracer1702/Projects/automata_lab/cbf_lite/Results/Summer 2025/1D Double Integrator Tuning/Fix post Feedback 1/Batch"
+os.makedirs(base_path, exist_ok=True)
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+save_path = os.path.join(base_path, f"run_{timestamp}.json")
+
 if __name__ == "__main__":
     
     sim_params, sensor_params, control_params, belief_cbf_params = getSimParams()
-
     printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
 
-    metrics = simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=0)
+    indices = list(range(start_idx, end_idx + 1))
 
-    printMetrics(metrics)
+    metrics_sum = {}
+
+    for i in tqdm(indices, desc="Running simulations"):
+
+        key = jax.random.PRNGKey(i)
+
+        metrics = simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=key)
+        # printMetrics(metrics) # For a single simuation
+
+        # Accumulate sums for running average
+        if not metrics_sum:
+            metrics_sum = {k: float(v) for k, v in metrics.items()}
+        else:
+            for k in metrics:
+                metrics_sum[k] += float(metrics[k])
+
+        # Save every nth run
+        if (i - start_idx + 1) % save_freq == 0:
+            avg_metrics = {k: v / (i - start_idx + 1) for k, v in metrics_sum.items()}
+            with open(save_path, "w") as f:
+                json.dump({
+                    "avg_metrics": avg_metrics
+                }, f, indent=2)
+
+     # Final average
+    avg_metrics = {k: v / len(indices) for k, v in metrics_sum.items()}
+
+    print(f"\n --- Results for runs {start_idx} to {end_idx} ({end_idx - start_idx + 1} runs) ---")
+    printMetrics(avg_metrics)
+
+
 
 
 
