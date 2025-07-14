@@ -12,6 +12,7 @@ from cbfs import vanilla_clf_dubins as clf
 from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
+
 # from sensor import ubiased_noisy_sensor as sensor
 
 # Sim Params
@@ -38,8 +39,8 @@ obstacle = jnp.array([wall_y])  # Wall
 # Mean and covariance
 x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
 # x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=(sigma_v**2)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -53,7 +54,7 @@ u_max = 5.0
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 100.0
 cbf_gain = 10.0  # CBF linear gain
-CBF_ON = True
+CBF_ON = False
 
 # Autodiff: Compute Gradients for CLF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
