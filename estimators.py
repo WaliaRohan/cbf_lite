@@ -118,7 +118,7 @@ class GEKF:
         # Covariance initialization
         self.P = P_init if P_init is not None else jnp.eye(dynamics.state_dim) * 0.1  
         self.Q = dynamics.Q # Process noise covariance
-        self.R = sigma_v*jnp.eye(dynamics.state_dim) if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
+        self.R = R if R is not None else jnp.square(sigma_v)*jnp.eye(dynamics.state_dim)  # Measurement noise covariance
 
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
         self.sigma_minus = self.P # For computing probability bound
