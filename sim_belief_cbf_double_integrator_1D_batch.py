@@ -187,6 +187,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     x_measured = x_initial_measurement
 
     solve_qp_cpu = jit(solve_qp, backend='cpu')
+    solve_qp_gpu = jit(solve_qp, backend='gpu')
 
     # Simulation loop
     for t in tqdm(range(T), desc="Simulation Progress"):
@@ -201,6 +202,8 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
              sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp(belief)
         elif jax_device == "cpu":
             sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp_cpu(belief)
+        elif jax_device == "gpu":
+            sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp_gpu(belief)
 
         # DEBUGGING
         list_lgv.append(LgV)
@@ -377,7 +380,7 @@ def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
     print(f"Time Step (dt): {dt}")
     print(f"Number of Steps (T): {T}")
     print(f"Default jax backend device: {jax.default_backend()}")
-    print(f"Requested jax device:  {sim_params["jax_device"]}")
+    print(f"Requested jax device:  {sim_params['jax_device']}")
 
     print("\n-- Sensor Params ---")
     print(f"Sensor Type: {sensor.__name__}")
