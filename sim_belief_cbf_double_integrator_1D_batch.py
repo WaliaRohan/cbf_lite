@@ -35,7 +35,7 @@ def getSimParams():
         "sigma_u": jnp.sqrt(0.01), # std deviation
         "mu_v": 0.001,
         "sigma_v": jnp.sqrt(0.0005), # std deviation
-        "sensor_update_frequency": 100,
+        "sensor_update_frequency": 10,
     }
 
     control_params = {
@@ -411,13 +411,13 @@ def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
     print(f"Failure Probability Threshold (delta): {delta}")
 
 start_idx = 1
-end_idx = 50
+end_idx = 100
 
-save_freq = 25
+save_freq = 10
 base_path = "/home/speedracer1702/Projects/automata_lab/cbf_lite/Results/Summer 2025/1D Double Integrator Tuning/Fix post Feedback 1/Batch"
 os.makedirs(base_path, exist_ok=True)
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-save_path = os.path.join(base_path, f"run_{timestamp}.json")
+save_path = os.path.join(base_path, f"run_EKF_nominal_{timestamp}.json")
 
 if __name__ == "__main__":
     
@@ -447,6 +447,12 @@ if __name__ == "__main__":
             avg_metrics = {k: v / (i - start_idx + 1) for k, v in metrics_sum.items()}
             with open(save_path, "w") as f:
                 json.dump({
+                    "start_idx": start_idx,
+                    "end_idx": i,
+                    "sim_params": {k: str(v) for k, v in sim_params.items()},
+                    "sensor_params": {k: str(v) for k, v in sensor_params.items()},
+                    "control_params": {k: str(v) for k, v in control_params.items()},
+                    "belief_cbf_params": {k: str(v) for k, v in belief_cbf_params.items()},
                     "avg_metrics": avg_metrics
                 }, f, indent=2)
 
