@@ -47,7 +47,7 @@ class NonLinearSingleIntegrator1D:
         return self.g_matrix  # Constant control influence
     
     def x_dot(self, x, u):
-        return self.f_matrix(x)+ self.g_matrix(x) @ u
+        return self.f(x)+ self.g(x) @ u
 
 class SimpleDynamics:
     """Simple system dynamics: dx/dt = f(x) + g(x) u"""
