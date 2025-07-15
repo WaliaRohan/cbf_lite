@@ -7,7 +7,7 @@ from jaxopt import BoxOSQP as OSQP
 from tqdm import tqdm
 
 from cbfs import BeliefCBF
-from cbfs import clf_1D_doubleint as clf
+from cbfs import vanilla_clf_x as clf
 from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
@@ -15,13 +15,13 @@ from sensor import noisy_sensor_mult as sensor
 def getSimParams():
     sim_params = {
     "dt": 0.001,
-    "T": 10000,
-    "dynamics": LinearDoubleIntegrator1D(),
+    "T": 5000,
+    "dynamics": NonLinearSingleIntegrator1D(),
     "wall_x": 6.0,
     "goal_x": 7.0,
-    "x_init": [1.0, 0.0],
-    "estimator_type": "EKF",
-    "jax_device": "cpu" # gpu, or None (if you don't want to jit)
+    "x_init": [0.0],
+    "estimator_type": "GEKF",
+    "jax_device": "cpu" # cpu, gpu, or None (if you don't want to jit)
     }
 
     sensor_params = {
@@ -41,7 +41,7 @@ def getSimParams():
     }
 
     belief_cbf_params = {
-        "alpha": jnp.array([-1.0, 0.0]),
+        "alpha": jnp.array([-1.0]),
         "beta": -sim_params["wall_x"],
         "delta": 0.001  # Probability of failure threshold
     }
@@ -76,7 +76,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     beta = belief_cbf_params["beta"]
     delta = belief_cbf_params["delta"]
 
-    # Initial state (truth)
+    # Initial control state (truth)
     x_true = jnp.array([x_init])  # Start position
     goal = jnp.array([goal_x])  # Goal position
 
@@ -97,14 +97,6 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
 
     # OSQP solver instance
     solver = OSQP()
-
-    list_lgv = []
-    list_Lg_Lf_h = []
-    list_rhs = []
-    list_L_f_h = []
-    list_L_f_2_h = []
-    list_grad_h_b = []
-    list_f_b = []
 
     def solve_qp(b):
         x_estimated, _ = cbf.extract_mu_sigma(b)
@@ -152,6 +144,12 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
             0.0 # slack can't be negative
         ])
 
+        # Remove CBF conditions if CBF is not ON
+        if not CBF_ON:
+            A = jnp.delete(A, 1, axis=0)  # Remove 2nd row
+            u = jnp.delete(u, 1)          # Remove corresponding element in u
+            l = jnp.delete(l, 1)          # Remove corresponding element in l
+
         # Solve the QP using jaxopt OSQP
         sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
         return sol, clf_gain*V, cbf_gain*h
@@ -182,7 +180,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
 
         # Solve QP
 
-        if jax_device is None:
+        if jax_device == "None":
              sol, V, h = solve_qp(belief)
         elif jax_device == "cpu":
             sol, V, h = solve_qp_cpu(belief)
@@ -193,10 +191,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
         u_sol = jnp.array([sol.primal[0][0]])
         u_opt = jnp.clip(u_sol, -u_max, u_max)
 
-
-        # Extract theta from y_dot
-
-        # Apply control to the true state (x_true)
+        # Apply control to the true state
         x_true = x_true + dt * dynamics.x_dot(x_true, u_opt)
 
         estimator.predict(u_opt)
@@ -232,62 +227,60 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
         covariances.append(p_estimated)
         in_covariances.append(estimator.in_cov)
 
-    # Convert to numpy arrays for analyzing
-    x_traj = np.array(x_traj).squeeze()
-    x_meas = np.array(x_meas).squeeze()
-    x_est = np.array(x_est).squeeze()
+   # Convert to numpy arrays for plotting
+    x_traj = np.array(x_traj)
+    x_meas = np.array(x_meas)
+    x_est = np.array(x_est)
 
-    # time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
+    time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
-    # # Second figure: X component comparison
-    # plt.figure(figsize=(10, 10))
-    # # Position x
-    # plt.plot(time, x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2, alpha=0.5)
-    # plt.plot(time, x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=1.75)
-    # plt.plot(time, x_traj[:, 0], color="blue", label="True x", linewidth=2)
-    # # Velocity v
+    # Plot trajectory
+    plt.figure(figsize=(10, 10))
+    # Position x
+    plt.plot(time, x_meas[:, 0], color="green", label="Measured x", linestyle="dashed", linewidth=2, alpha=0.5)
+    plt.plot(time, x_est[:, 0], color="orange", label="Estimated x", linestyle="dotted", linewidth=1.75)
+    plt.plot(time, x_traj[:, 0], color="blue", label="True x", linewidth=2)
+    # Velocity v
     # plt.plot(time, x_meas[:, 1], color="green", label="Measured v", linestyle="dashdot", linewidth=2, alpha=0.5)
     # plt.plot(time, x_est[:, 1], color="orange", label="Estimated v", linestyle="dotted", linewidth=1.5)
     # plt.plot(time, x_traj[:, 1], color="blue", label="True v", linestyle="solid", linewidth=1)
-    # # Add horizontal lines
-    # plt.axhline(y=wall_x, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
-    # plt.axhline(y=goal_x, color="purple", linestyle="dashed", linewidth=1, label="Goal")
-    # plt.xlabel("Time step (s)", fontsize=16)
-    # plt.ylabel("State value", fontsize=16)
-    # plt.xticks(fontsize=14)
-    # plt.yticks(fontsize=14)
-    # plt.legend(fontsize=14)
-    # plt.title("State Components Over Time: Position and Velocity", fontsize=18)
-    # plt.show()
+    # Add horizontal lines
+    plt.axhline(y=wall_x, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
+    plt.axhline(y=goal_x, color="purple", linestyle="dashed", linewidth=1, label="Goal")
+    plt.xlabel("Time step (s)", fontsize=16)
+    plt.ylabel("State value", fontsize=16)
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
+    plt.legend(fontsize=14)
+    plt.title("State Components Over Time: Position", fontsize=18)
+    plt.show()
 
-    # # # Plot controls
-    # plt.figure(figsize=(10, 10))
-    # plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
-    # plt.plot(time, np.array(cbf_values), color='red', label="CBF")
-    # plt.plot(time, np.array(clf_values), color='green', label="CLF")
-    # plt.xlabel("Time step (s)")
-    # plt.ylabel("Value")
-    # plt.title(f"CBF, CLF, and Control Values ({estimator.name})")
-    # # Tick labels font size
-    # plt.xticks(fontsize=14)
-    # plt.yticks(fontsize=14)
-    # # Legend font size
-    # plt.legend(fontsize=14)
-    # plt.show()
+    # Plot controls
+    plt.figure(figsize=(10, 10))
+    plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
+    plt.plot(time, np.array(cbf_values), color='red', label="CBF")
+    plt.plot(time, np.array(clf_values), color='green', label="CLF")
+    plt.xlabel("Time step (s)")
+    plt.ylabel("Value")
+    plt.title(f"CBF, CLF, and Control Values ({estimator.name})")
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
+    plt.legend(fontsize=14)
+    plt.show()
 
-    # kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-    # covariance_traces = [jnp.trace(P) for P in covariances]
+    kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+    covariance_traces = [jnp.trace(P) for P in covariances]
 
-    # # # Plot trace of Kalman gains and covariances
-    # plt.figure(figsize=(10, 10))
-    # plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-    # plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-    # plt.xlabel("Time Step (s)")
-    # plt.ylabel("Trace Value")
-    # plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-    # plt.legend()
-    # plt.grid()
-    # plt.show()
+    # # Plot trace of Kalman gains and covariances
+    plt.figure(figsize=(10, 10))
+    plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+    plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+    plt.xlabel("Time Step (s)")
+    plt.ylabel("Trace Value")
+    plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+    plt.legend()
+    plt.grid()
+    plt.show()
 
     # Define Metrics
     metrics = {
