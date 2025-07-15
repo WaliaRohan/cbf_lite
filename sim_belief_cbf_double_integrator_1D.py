@@ -265,10 +265,9 @@ plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
 plt.title("State Components Over Time: Position and Velocity", fontsize=18)
-# plt.grid()
 plt.show()
 
-# # Plot controls
+# Plot controls
 plt.figure(figsize=(10, 10))
 plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
 plt.plot(time, np.array(cbf_values), color='red', label="CBF")
@@ -276,10 +275,8 @@ plt.plot(time, np.array(clf_values), color='green', label="CLF")
 plt.xlabel("Time step (s)")
 plt.ylabel("Value")
 plt.title(f"CBF, CLF, and Control Values ({estimator.name})")
-# Tick labels font size
 plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
-# Legend font size
 plt.legend(fontsize=14)
 plt.show()
 
