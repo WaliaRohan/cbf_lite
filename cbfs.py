@@ -122,7 +122,7 @@ class BeliefCBF:
         upper_triangular_indices = jnp.triu_indices(sigma.shape[0])
         vec_sigma = sigma[upper_triangular_indices]
 
-        b = jnp.concatenate([mu.squeeze(), vec_sigma])
+        b = jnp.concatenate([mu.flatten(), vec_sigma]) # mu.squeeze() would not work for shapes of size (1, 1) (it deletes all 1 dimensions). mu.flatten() makes final shape (n, ), regardless of original shape. 
 
         return b
     
@@ -148,17 +148,22 @@ class BeliefCBF:
             
             sigma_matrix: f_sigma or g_sigma
             """
-            shape = sigma_matrix.shape  # G_sigma is (n, m, n)
-            n = shape[0]
-            m = shape[1]
 
-            # Create indices for the upper triangular part
-            tri_indices = jnp.triu_indices(n)
+            if sigma_matrix.shape == (1, 1):
+                return sigma_matrix.flatten()
 
-            # Extract upper triangular elements from each m-th slice
-            sigma_vector = jnp.array([sigma_matrix[:, j][tri_indices] for j in range(m)]).T # TODO: Check if this is valid for m > 1
-            
-            return sigma_vector
+            else:
+                shape = sigma_matrix.shape  # G_sigma is (n, m, n)
+                n = shape[0]
+                m = shape[1]
+
+                # Create indices for the upper triangular part
+                tri_indices = jnp.triu_indices(n)
+
+                # Extract upper triangular elements from each m-th slice
+                sigma_vector = jnp.array([sigma_matrix[:, j][tri_indices] for j in range(m)]).T # TODO: Check if this is valid for m > 1
+                
+                return sigma_vector
 
         def f_b(b):
             # Time update evaluated at mean

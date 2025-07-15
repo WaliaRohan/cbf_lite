@@ -35,8 +35,10 @@ class EKF:
         # Compute Jacobian of dynamics (linearization)
         F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
 
-        # Covariance udpate  
-        P_dot = F.squeeze() @ self.P + self.P @ F.squeeze().T + self.Q
+        # Covariance udpate 
+        if len(F.shape) > 2: 
+            F = F.squeeze()
+        P_dot = F @ self.P + self.P @ F.T + self.Q
         self.P = self.P + P_dot*self.dt
 
     def update(self, z):
@@ -136,7 +138,9 @@ class GEKF:
         F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
 
         # Covariance udpate
-        P_dot = F.squeeze() @ self.P + self.P @ F.squeeze().T + self.Q
+        if len(F.shape) > 2: 
+            F = F.squeeze()
+        P_dot = F @ self.P + self.P @ F.T + self.Q
 
         self.P = self.P + P_dot*self.dt
 
