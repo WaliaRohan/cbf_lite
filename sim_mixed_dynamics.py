@@ -15,7 +15,7 @@ from sensor import noisy_sensor_mult as sensor
 def getSimParams():
     sim_params = {
     "dt": 0.001,
-    "T": 5000,
+    "T": 20000,
     "dynamics": NonLinearSingleIntegrator1D(),
     "wall_x": 6.0,
     "goal_x": 7.0,
@@ -33,7 +33,7 @@ def getSimParams():
     }
 
     control_params = {
-        "u_max": 5.0,
+        "u_max": 0.5,
         "clf_gain": 20.0,
         "clf_slack_penalty": 50.0,
         "cbf_gain": 2.5,
@@ -98,6 +98,12 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     # OSQP solver instance
     solver = OSQP()
 
+    ### Dubins Dynamics (Actuation)
+    # For now assume x = y (we don't know that yet)
+    vel_lin = 1.0
+    dubins_true = jnp.array([x_true.squeeze(), x_true.squeeze(), vel_lin, 0.0]) # x, y, v, theta
+    dubins_dynamics = DubinsDynamics()
+
     def solve_qp(b):
         x_estimated, _ = cbf.extract_mu_sigma(b)
 
@@ -154,6 +160,31 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
         sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
         return sol, clf_gain*V, cbf_gain*h
 
+
+    def map2dubins(dubins_true, single_int_u):
+        """
+        Function to calculate control for dubins dynamics based on control for
+        single int dynamics (anglular velocity)
+
+        Args:
+            dubins_true (array): Current state of dubins dynamics
+            single_int_true (array): Current state of single_int dynamics
+            single_int_u (array): Optimal control calculated for single int dynamics (y_dot)
+
+        Returns:
+            array: optimal control for dubins dynamics
+        """
+        
+        # From dubins dynamics, y_dot = v*cos(theta)
+        y_dot = single_int_u # From single integrator dynamics
+        goal_theta = jnp.arccos(y_dot/vel_lin) # From dubins dynamics
+
+        # Calculate required change in theta for current time step
+        current_theta = dubins_true[-1]
+        theta_dot = goal_theta - current_theta
+
+        return theta_dot
+
     x_traj = []  # Store trajectory
     x_meas = [] # Measurements
     x_est = [] # Estimates
@@ -169,12 +200,15 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
 
     x_measured = x_initial_measurement
 
+    dubins_traj = [] # Store dubins trajectory
+
     solve_qp_cpu = jit(solve_qp, backend='cpu')
 
     # Simulation loop
     for t in tqdm(range(T), desc="Simulation Progress"):
 
         x_traj.append(x_true)
+        dubins_traj.append(dubins_true)
 
         belief = cbf.get_b_vector(x_estimated, p_estimated)
 
@@ -189,11 +223,19 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
         cbf_values.append(h)
 
         u_sol = jnp.array([sol.primal[0][0]])
-        u_opt = jnp.clip(u_sol, -u_max, u_max)
+        u_opt = jnp.clip(u_sol, -u_max, u_max) # TODO: Play with these values
 
-        # Apply control to the true state
-        x_true = x_true + dt * dynamics.x_dot(x_true, u_opt)
+        # Map single int control to dubins control
+        # x_true = x_true + dt * dynamics.x_dot(x_true, u_opt)
 
+        u_dubins = map2dubins(dubins_true, u_opt)
+
+        dubins_true = dubins_true + dt * dubins_dynamics.x_dot(dubins_true, u_dubins)
+
+        # Use new dubins y_component to update single_int trajectory
+        x_true = jnp.array([[dubins_true[1]]])
+
+        ## Estimation and sensing has nothing to do with dubins dynamics
         estimator.predict(u_opt)
 
         # update measurement and estimator belief
@@ -231,6 +273,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     x_traj = np.array(x_traj)
     x_meas = np.array(x_meas)
     x_est = np.array(x_est)
+    dubins_traj = np.array(dubins_traj)
 
     time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
@@ -248,11 +291,24 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     plt.axhline(y=wall_x, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
     plt.axhline(y=goal_x, color="purple", linestyle="dashed", linewidth=1, label="Goal")
     plt.xlabel("Time step (s)", fontsize=16)
-    plt.ylabel("State value", fontsize=16)
+    plt.ylabel("Y", fontsize=16)
     plt.xticks(fontsize=14)
     plt.yticks(fontsize=14)
     plt.legend(fontsize=14)
-    plt.title("State Components Over Time: Position", fontsize=18)
+    plt.title("Y Trajectory", fontsize=18)
+    plt.show()
+
+    # Plot dubins dynamics
+    plt.figure(figsize=(10, 10))
+    plt.plot(dubins_traj[:, 0], dubins_traj[:, 1], "b-", label="Dubins Trajectory (True state)")
+    plt.axhline(y=wall_x, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
+    plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
+    # plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
+    plt.xlabel("x", fontsize=14)
+    plt.ylabel("y", fontsize=14)
+    plt.title("2D Trajectory", fontsize=14)
+    plt.legend()
+    plt.grid()
     plt.show()
 
     # Plot controls
