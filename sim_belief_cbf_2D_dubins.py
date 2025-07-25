@@ -36,14 +36,13 @@ goal = 3.0*jnp.array([1.0, 1.0])  # Goal position
 obstacle = jnp.array([wall_y])  # Wall
 
 # Mean and covariance
-x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v, mult_state=1) # mult_noise
-x_initial_measurement = x_true                                                                             # TODO: THIS IS WRONG. ONLY DID THIS FOR TESTING EKF/GEKF WITH PARTIAL STATE OBSERVATION
-# x_initial_measurement = sensor(x_true, t=0, cov=sigma_v) # unbiased_fixed_noise
+x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
+# x_initial_measurement = sensor(x_true, t=0, std=sigma_v) # unbiased_fixed_noise
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
 h = lambda x: jnp.array([x[1]])
 # estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
-estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -189,7 +188,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # update measurement and estimator belief
     if t > 0 and t%(1/sensor_update_frequency) == 0:
         # obtain current measurement
-        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v, mult_state=1)
+        x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
         # x_measured = sensor(x_true) # for identity sensor
         # x_measured = sensor(x_true, t, sigma_v) # for fixed unbiased noise sensor
 
