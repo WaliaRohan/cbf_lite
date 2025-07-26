@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import mplcursors  # for enabling data cursor in matplotlib plots
+# import mplcursors  # for enabling data cursor in matplotlib plots
 import numpy as np
 from jax import grad, jit
 from jaxopt import BoxOSQP as OSQP
@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 2500 # 5000
+T = 5000 # 5000
 dynamics = DubinsDynamics()
 
 # Sensor Params
