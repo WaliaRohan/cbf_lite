@@ -2,11 +2,7 @@ import os
 
 import jax
 import jax.numpy as jnp
-import jax.scipy.linalg as linalg
-import pandas as pd
-from jax import jit
 from jax.scipy.special import erf, erfinv
-from openpyxl import load_workbook
 
 class EKF:
     """Discrete EKF"""
@@ -136,7 +132,7 @@ class GEKF:
         # Covariance initialization
         self.P = P_init if P_init is not None else jnp.eye(dynamics.state_dim) * 0.1  
         self.Q = dynamics.Q # Process noise covariance
-        self.R = R if R is not None else jnp.square(sigma_v)*jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
+        self.R = R if R is not None else jnp.square(sigma_v)*jnp.eye(dynamics.state_dim) # Measurement noise covariance
 
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
         self.sigma_minus = self.P
@@ -169,25 +165,24 @@ class GEKF:
         """
         mu_u = self.mu_u
         sigma_u = self.sigma_u
-
         mu_v = self.mu_v
-
-        h_z = self.h(self.x_hat)
 
         H_x = jax.jacfwd(self.h)(self.x_hat)
         obs_dim = len(H_x) # Number of rows in H_X == observation space dim
 
-        z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
-      
         # Perfect state observation
         # h_z = self.x_hat
         # dhdx = jnp.eye(self.dynamics.state_dim)
-        dhdx = H_x
 
+        z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
+
+        h_z = self.h(self.x_hat)
         E = (1 + mu_u)*h_z + mu_v # This is the "observation function output" for GEKF
 
         y = (z_obs - E) # Innovation term: note self.x_hat comes from identity observation model
         y = jnp.reshape(y, (obs_dim, 1)) 
+
+        dhdx = H_x
 
         C = (1 + mu_u)*jnp.matmul(self.P, jnp.transpose(dhdx))  # Perform the matrix multiplication
         
