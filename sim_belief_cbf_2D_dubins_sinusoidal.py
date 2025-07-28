@@ -8,7 +8,7 @@ from jaxopt import BoxOSQP as OSQP
 from tqdm import tqdm
 
 from cbfs import BeliefCBF
-from cbfs import vanilla_clf_dubins_2D as clf, sinusoidal_trajectory
+from cbfs import vanilla_clf_dubins_2D as clf, sinusoidal_trajectory, update_trajectory_index
 from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 5000 # 5000
+T = 15000 # 5000
 dynamics = DubinsDynamics()
 
 # Sensor Params
@@ -27,7 +27,7 @@ sigma_v = jnp.sqrt(0.0005) # Standard deviation
 sensor_update_frequency = 0.1 # Hz
 
 # Obstacle
-wall_y = 4.5
+wall_y = 10.0
 
 # Initial state
 lin_vel = 5.0
@@ -35,7 +35,7 @@ x_init = [0.0, 0.0, lin_vel, 0.0] # x, y, v, theta
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
-goal = 5.0*jnp.array([1.0, 1.0])  # Goal position
+goal = 18.0*jnp.array([1.0, 1.0])  # Goal position
 obstacle = jnp.array([wall_y])  # Wall
 
 # Mean and covariance
@@ -44,8 +44,8 @@ x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_n
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
 h = lambda x: jnp.array([x[1]])
-# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
-estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
+estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
+# estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -63,7 +63,7 @@ cbf2 = BeliefCBF(alpha2, beta2, delta2, n)
 # Control params
 u_max = 15.0
 clf_gain = 20.0 # CLF linear gain
-clf_slack_penalty = 100.0
+clf_slack_penalty = 50.0
 cbf_gain = 10.0  # CBF linear gain
 CBF_ON = True
 
@@ -74,14 +74,6 @@ grad_V = grad(clf, argnums=0)  # ∇V(x)
 solver = OSQP()
 
 print(jax.default_backend())
-
-list_lgv = []
-list_Lg_Lf_h = []
-list_rhs = []
-list_L_f_h = []
-list_L_f_2_h = []
-list_grad_h_b = []
-list_f_b = []
 
 def solve_qp(b, goal_loc):
     x_estimated, sigma = cbf.extract_mu_sigma(b)
@@ -144,9 +136,9 @@ def solve_qp(b, goal_loc):
     ])
 
     if not CBF_ON:
-        A = jnp.delete(A, [1, 2], axis=0) # Remove CBF conditions
-        u = jnp.delete(u, [1, 2])          # Remove corresponding element in u
-        l = jnp.delete(l, [1, 2])          # Remove corresponding element in l
+        A = jnp.concatenate([A[:1], A[3:]], axis=0) # Remove CBF conditions
+        u = jnp.concatenate([u[:1], u[3:]], axis=0)        # Remove corresponding element in u
+        l = jnp.concatenate([l[:1], l[3:]], axis=0)         # Remove corresponding element in l
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
@@ -171,6 +163,19 @@ x_measured = x_initial_measurement
 
 solve_qp_cpu = jit(solve_qp, backend='cpu')
 
+goal_loc = x_init[0:2]
+
+t_vec = jnp.arange(0.0, T + 1.0, 1.0)*dt
+goal_x_nom = sinusoidal_trajectory(t_vec, A=goal[1], omega=1.0, v=lin_vel).T  # shape (T/dt, 2)
+
+plt.figure(figsize=(10, 10))
+plt.plot(goal_x_nom[:, 0], goal_x_nom[:, 1], "Green", label="Nominal Trajectory")
+plt.show()
+plt.pause(0)
+
+traj_idx = 0
+goal_loc = goal_x_nom[traj_idx]
+
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
 
@@ -178,23 +183,10 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     belief = cbf.get_b_vector(x_estimated, p_estimated)
 
-    # Solve QP
-    # sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp_cpu(belief)
-    # sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp(belief)
-
-    goal_loc = sinusoidal_trajectory(t*dt, A=goal[1], omega=2.0, v=lin_vel)
+    # target_goal_loc = sinusoidal_trajectory(t*dt, A=goal[1], omega=1.0, v=lin_vel)
 
     sol, V = solve_qp_cpu(belief, goal_loc)
     # sol, V = solve_qp(belief, goal_loc)
-
-    # DEBUGGING
-    # list_lgv.append(LgV)
-    # list_Lg_Lf_h.append(Lg_Lf_h)
-    # list_rhs.append(rhs)
-    # list_L_f_h.append(L_f_h)
-    # list_L_f_2_h.append(L_f_2_h)
-    # list_grad_h_b.append(grad_h_b)
-    # list_f_b.append(f_b)
 
     clf_values.append(V)
     # cbf_values.append(h)
@@ -229,6 +221,15 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     x_estimated, p_estimated = estimator.get_belief()
 
+
+    if (x_estimated[1] < wall_y and x_estimated[1] > -wall_y):
+        eta = 7.0
+    else:
+        eta = 15.0
+
+    traj_idx = update_trajectory_index(x_estimated[0:2], goal_x_nom, traj_idx, eta=eta)
+    goal_loc = goal_x_nom[traj_idx]
+
     # Store for plotting
     u_traj.append(u_opt)
     x_meas.append(x_measured)
@@ -243,21 +244,23 @@ x_traj = jnp.array(x_traj)
 
 # Convert to numpy arrays for plotting
 x_traj = np.array(x_traj).squeeze()
-# x_meas = np.array(x_meas).squeeze()
+x_meas = np.array(x_meas).squeeze()
 x_est = np.array(x_est).squeeze()
 
 x_nom = np.array(x_nom).squeeze()
+np.savetxt("x_nom.csv", x_nom, delimiter=",")
 
 time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
 # Plot trajectory with y-values set to zero
 plt.figure(figsize=(10, 10))
-# plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory")
+plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
 plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
 plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
 plt.plot(x_nom[:, 0], x_nom[:, 1], "Green", label="Nominal Trajectory")
 plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
-plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
+plt.axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
+# plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
 # plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
 plt.xlabel("x", fontsize=14)
 plt.ylabel("y", fontsize=14)

@@ -9,7 +9,8 @@ def sinusoidal_trajectory(t, A=1.0, omega=1.0, v=1.0, phase=0.0):
     Generate a 2D sinusoidal trajectory.
 
     Parameters:
-        t (array-like): Time vector
+        t (array): Time vector
+        state (array): State vector
         A (float): Amplitude of sine wave
         omega (float): Angular frequency of sine wave
         v (float): Constant forward velocity in x-direction
@@ -19,10 +20,33 @@ def sinusoidal_trajectory(t, A=1.0, omega=1.0, v=1.0, phase=0.0):
         x (ndarray): x-positions (linear)
         y (ndarray): y-positions (sinusoidal)
     """
+    # t = jnp.asarray(t)
+    # x = v * t
+    # y = A * jnp.sin(omega * t + phase)
+    # return jnp.array([x, y])
     t = jnp.asarray(t)
     x = v * t
-    y = A * jnp.sin(omega * t + phase)
+    T = t[-1]
+    amp_ramp = jnp.sin(0.75 * jnp.pi * t / T)
+    y = (A * amp_ramp) * jnp.sin(omega * t + phase)
     return jnp.array([x, y])
+
+def update_trajectory_index(system_pos, traj, index, eta):
+    """
+    Advance trajectory index if system is within eta of current target point.
+    
+    Inputs:
+        system_pos (jnp.ndarray): shape (2,)
+        traj (jnp.ndarray): shape (N, 2)
+        index (int): current index
+        eta (float): threshold distance
+
+    Returns:
+        new_index (int): updated index (may be unchanged)
+    """
+    current_target = traj[index]
+    dist = jnp.linalg.norm(system_pos - current_target)
+    return jnp.where(dist < eta, jnp.minimum(index + 1, traj.shape[0] - 1), index)
 
 # CLF: V(x) = ||x - goal||^2
 def vanilla_clf(state, goal):
