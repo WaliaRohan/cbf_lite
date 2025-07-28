@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000 # 5000
+T = 5000 # 5000
 dynamics = DubinsDynamics()
 
 # Sensor Params
@@ -27,7 +27,7 @@ sigma_v = jnp.sqrt(0.0005) # Standard deviation
 sensor_update_frequency = 0.1 # Hz
 
 # Obstacle
-wall_y = 2.5
+wall_y = 4.5
 
 # Initial state
 lin_vel = 5.0
@@ -35,7 +35,7 @@ x_init = [0.0, 0.0, lin_vel, 0.0] # x, y, v, theta
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
-goal = 3.0*jnp.array([1.0, 1.0])  # Goal position
+goal = 5.0*jnp.array([1.0, 1.0])  # Goal position
 obstacle = jnp.array([wall_y])  # Wall
 
 # Mean and covariance
@@ -44,8 +44,8 @@ x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_n
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
 h = lambda x: jnp.array([x[1]])
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
+# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
+estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -54,12 +54,18 @@ beta = jnp.array([-wall_y])
 delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
+# CBF 2
+alpha2 = jnp.array([0.0, 1.0, 0.0, 0.0])
+beta2 = jnp.array([-wall_y])
+delta2 = 0.001  # Probability of failure threshold
+cbf2 = BeliefCBF(alpha2, beta2, delta2, n)
+
 # Control params
 u_max = 15.0
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 100.0
 cbf_gain = 10.0  # CBF linear gain
-CBF_ON = False
+CBF_ON = True
 
 # Autodiff: Compute Gradients for CLF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -88,14 +94,21 @@ def solve_qp(b, goal_loc):
     L_f_V = jnp.dot(grad_V_x.T, dynamics.f(x_estimated))
     L_g_V = jnp.dot(grad_V_x.T, dynamics.g(x_estimated))
     
-    # # Compute CBF components
+    # Compute CBF components
     h = cbf.h_b(b)
     L_f_hb, L_g_hb, L_f_2_h, Lg_Lf_h, grad_h_b, f_b = cbf.h_dot_b(b, dynamics) # ∇h(x)
 
     L_f_h = L_f_hb
-    L_g_h = L_g_hb
 
     rhs, L_f_h, h_gain = cbf.h_b_r2_RHS(h, L_f_h, L_f_2_h, cbf_gain)
+
+    # Compute CBF2 components
+    h_2 = cbf2.h_b(b)
+    L_f_hb_2, L_g_hb_2, L_f_2_h_2, Lg_Lf_h_2, _, _ = cbf2.h_dot_b(b, dynamics) # ∇h(x)
+
+    L_f_h_2 = L_f_hb_2
+
+    rhs2, L_f_h2, _ = cbf2.h_b_r2_RHS(h_2, L_f_h_2, L_f_2_h_2, cbf_gain)
 
     # Define Q matrix: Minimize ||u||^2 and slack (penalty*delta^2)
     Q = jnp.array([
@@ -109,6 +122,7 @@ def solve_qp(b, goal_loc):
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 
         [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
+        [-Lg_Lf_h_2.flatten()[0].astype(float), 0.0], # 2nd CBF
         [1, 0],
         [0, 1]
     ])
@@ -116,6 +130,7 @@ def solve_qp(b, goal_loc):
     u = jnp.hstack([
         (-L_f_V - clf_gain * V).squeeze(),          # CLF constraint
         (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
+        (rhs2).squeeze(),                           # 2nd CBF constraint
         u_max, 
         jnp.inf # no upper limit on slack
     ])
@@ -123,18 +138,18 @@ def solve_qp(b, goal_loc):
     l = jnp.hstack([
         -jnp.inf, # No lower limit on CLF condition
         -jnp.inf, # No lower limit on CBF condition
+        -jnp.inf, # 2nd CBF
         -u_max,
         0.0 # slack can't be negative
     ])
 
     if not CBF_ON:
-        A = jnp.delete(A, 1, axis=0)  # Remove 2nd row
-        u = jnp.delete(u, 1)          # Remove corresponding element in u
-        l = jnp.delete(l, 1)          # Remove corresponding element in l
+        A = jnp.delete(A, [1, 2], axis=0) # Remove CBF conditions
+        u = jnp.delete(u, [1, 2])          # Remove corresponding element in u
+        l = jnp.delete(l, [1, 2])          # Remove corresponding element in l
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
-    # return sol, V, h, L_g_V, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b
     return sol, V
 
 x_traj = []  # Store trajectory
@@ -167,7 +182,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp_cpu(belief)
     # sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp(belief)
 
-    goal_loc = sinusoidal_trajectory(t*dt, A=0.5, omega=2.0, v=lin_vel)
+    goal_loc = sinusoidal_trajectory(t*dt, A=goal[1], omega=2.0, v=lin_vel)
 
     sol, V = solve_qp_cpu(belief, goal_loc)
     # sol, V = solve_qp(belief, goal_loc)
