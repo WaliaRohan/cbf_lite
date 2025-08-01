@@ -2,14 +2,13 @@ import jax
 import jax.numpy as jnp
 from jax.scipy.special import erf, erfinv
 
-
 class EKF:
     """Discrete EKF"""
     
-    def __init__(self, dynamics, dt, x_init=None, P_init=None, R=None):
+    def __init__(self, dynamics, dt, h = None, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
         self.dt = dt  # Time step
-        self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim))  # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
+        self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # Ideally, it's shape should be (dynamics.state_dim, obs_dim)
         self.name = "EKF"
 
         # Initialize belief (state estimate)
@@ -22,6 +21,12 @@ class EKF:
 
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
         self.sigma_minus = self.P
+
+        # Initialize observation function as identity function
+        if h is None:
+            self.h = lambda x: x.ravel()
+        else:
+            self.h = h
 
     def predict(self, u):
         """
@@ -43,17 +48,27 @@ class EKF:
 
     def update(self, z):
         """
-        Measurement update step of EKF.
-        
-        z: Measurement
+        Measurement update step of EKF
 
+        Args:
+            z (): Measurement
         """
-        H = lambda x: x@jnp.eye(self.dynamics.state_dim) # Identity observation function (full state observation)
-        H_x = jnp.eye(self.dynamics.state_dim)  # Jacobian of measurement model (assuming direct state observation)
-        y = z - H(self.x_hat) # Innovation term
+        # H_x Jacobian of measurement function wrt state vector
+        H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
+        """
+        NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
+        state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
+        """
+        
+        obs_dim = len(H_x) # Number of rows in H_X == observation space dim
+
+        z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
+
+        y = (z_obs - self.h(self.x_hat)) # Innovation term: note self.x_hat comes from identity observation model
+        y = jnp.reshape(y, (obs_dim, 1)) 
 
         # Innovation Covariance
-        S = H_x @ self.P @ H_x.T + self.R
+        S = H_x @ self.P @ H_x.T + self.R[:obs_dim, :obs_dim]# self.
 
         # Handle degenerate S cases
         if jnp.linalg.norm(S) < 1e-8:
@@ -67,12 +82,12 @@ class EKF:
         self.in_cov = self.K @ S @ self.K.T
 
         # Update state estimate
-        self.x_hat = self.x_hat + jnp.transpose(jnp.matmul(self.K, jnp.transpose(y))) # Order of K and y in multiplication matters!
+        self.x_hat = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # Order of K and y in multiplication matters!
 
         self.sigma_minus = self.P # For computing probability bound
 
         # Update covariance
-        self.P = (jnp.eye(max(z.shape)) - self.K @ H_x) @ self.P
+        self.P = (jnp.eye(max(self.x_hat.shape)) - self.K @ H_x) @ self.P
 
     def get_belief(self):
         """Return the current belief (state estimate)."""
@@ -102,7 +117,7 @@ class EKF:
 class GEKF:
     """Continuous-Discrete GEKF"""
     
-    def __init__(self, dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=None, P_init=None, R=None):
+    def __init__(self, dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h = None, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
         self.dt = dt  # Time step
         self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
@@ -120,10 +135,16 @@ class GEKF:
         # Covariance initialization
         self.P = P_init if P_init is not None else jnp.eye(dynamics.state_dim) * 0.1  
         self.Q = dynamics.Q # Process noise covariance
-        self.R = R if R is not None else jnp.square(sigma_v)*jnp.eye(dynamics.state_dim)  # Measurement noise covariance
+        self.R = R if R is not None else jnp.square(sigma_v)*jnp.eye(dynamics.state_dim) # Measurement noise covariance
 
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
         self.sigma_minus = self.P # For computing probability bound
+
+        # Initialize observation function as identity function
+        if h is None:
+            self.h = lambda x: x
+        else:
+            self.h = h
 
     def predict(self, u):
         """
@@ -151,26 +172,38 @@ class GEKF:
         """
         mu_u = self.mu_u
         sigma_u = self.sigma_u
-
         mu_v = self.mu_v
-      
-        # Perfect state observation
-        h_z = self.x_hat
-        dhdx = jnp.eye(self.dynamics.state_dim)
 
+        # H_x Jacobian of measurement function wrt state vector
+        H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
+        """
+        NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
+        state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
+        """
+
+        obs_dim = len(H_x) # Number of rows in H_X == observation space dim
+
+        z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
+
+        h_z = self.h(self.x_hat)
         E = (1 + mu_u)*h_z + mu_v # This is the "observation function output" for GEKF
+
+        y = (z_obs - E) # Innovation term: note self.x_hat comes from identity observation model
+        y = jnp.reshape(y, (obs_dim, 1)) 
+
+        dhdx = H_x
 
         C = (1 + mu_u)*jnp.matmul(self.P, jnp.transpose(dhdx))  # Perform the matrix multiplication
         
         M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
         
         S_term_1 = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx)))  # Perform matrix multiplication
-        S = S_term_1 + jnp.square(sigma_u)*M + self.R
+        S = S_term_1 + jnp.square(sigma_u)*M + self.R[:obs_dim, :obs_dim]
 
         self.K = jnp.matmul(C, jnp.linalg.inv(S))
 
         # Update state estimate
-        self.x_hat = self.x_hat + jnp.transpose(jnp.matmul(self.K, jnp.transpose(z - E))) # double transpose because of how state is defined.
+        self.x_hat = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # double transpose because of how state is defined.
 
         # Update covariance
         self.P = self.P - jnp.matmul(self.K, jnp.transpose(C))

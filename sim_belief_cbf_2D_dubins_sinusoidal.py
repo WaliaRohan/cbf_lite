@@ -8,7 +8,7 @@ from jaxopt import BoxOSQP as OSQP
 from tqdm import tqdm
 
 from cbfs import BeliefCBF
-from cbfs import vanilla_clf_dubins as clf
+from cbfs import vanilla_clf_dubins_2D as clf, sinusoidal_trajectory, update_trajectory_index
 from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000
+T = 15000 # 5000
 dynamics = DubinsDynamics()
 
 # Sensor Params
@@ -27,12 +27,15 @@ sigma_v = jnp.sqrt(0.0005) # Standard deviation
 sensor_update_frequency = 0.1 # Hz
 
 # Obstacle
-wall_y = 2.5
-x_init = [0.0, 0.0, 1.0, 0.0] # x, y, v, theta
+wall_y = 10.0
+
+# Initial state
+lin_vel = 5.0
+x_init = [0.0, 0.0, lin_vel, 0.0] # x, y, v, theta
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
-goal = 3.0*jnp.array([1.0, 1.0])  # Goal position
+goal = 18.0*jnp.array([1.0, 1.0])  # Goal position
 obstacle = jnp.array([wall_y])  # Wall
 
 # Mean and covariance
@@ -40,10 +43,9 @@ x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_n
 # x_initial_measurement = sensor(x_true, t=0, std=sigma_v) # unbiased_fixed_noise
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
-# h = lambda x: jnp.array([x[1]])
-h = None
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
+h = lambda x: jnp.array([x[1]])
+# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
+estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -52,10 +54,16 @@ beta = jnp.array([-wall_y])
 delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
+# CBF 2
+alpha2 = jnp.array([0.0, 1.0, 0.0, 0.0])
+beta2 = jnp.array([-wall_y])
+delta2 = 0.001  # Probability of failure threshold
+cbf2 = BeliefCBF(alpha2, beta2, delta2, n)
+
 # Control params
-u_max = 5.0
+u_max = 15.0
 clf_gain = 20.0 # CLF linear gain
-clf_slack_penalty = 100.0
+clf_slack_penalty = 50.0
 cbf_gain = 10.0  # CBF linear gain
 CBF_ON = True
 
@@ -67,33 +75,32 @@ solver = OSQP()
 
 print(jax.default_backend())
 
-list_lgv = []
-list_Lg_Lf_h = []
-list_rhs = []
-list_L_f_h = []
-list_L_f_2_h = []
-list_grad_h_b = []
-list_f_b = []
-
-def solve_qp(b):
+def solve_qp(b, goal_loc):
     x_estimated, sigma = cbf.extract_mu_sigma(b)
 
     """Solve the CLF-CBF-QP using JAX & OSQP"""
     # Compute CLF components
-    V = clf(x_estimated, goal)
-    grad_V_x = grad_V(x_estimated, goal)  # ∇V(x)
+    V = clf(x_estimated, goal_loc)
+    grad_V_x = grad_V(x_estimated, goal_loc)  # ∇V(x)
 
     L_f_V = jnp.dot(grad_V_x.T, dynamics.f(x_estimated))
     L_g_V = jnp.dot(grad_V_x.T, dynamics.g(x_estimated))
     
-    # # Compute CBF components
+    # Compute CBF components
     h = cbf.h_b(b)
     L_f_hb, L_g_hb, L_f_2_h, Lg_Lf_h, grad_h_b, f_b = cbf.h_dot_b(b, dynamics) # ∇h(x)
 
     L_f_h = L_f_hb
-    L_g_h = L_g_hb
 
     rhs, L_f_h, h_gain = cbf.h_b_r2_RHS(h, L_f_h, L_f_2_h, cbf_gain)
+
+    # Compute CBF2 components
+    h_2 = cbf2.h_b(b)
+    L_f_hb_2, L_g_hb_2, L_f_2_h_2, Lg_Lf_h_2, _, _ = cbf2.h_dot_b(b, dynamics) # ∇h(x)
+
+    L_f_h_2 = L_f_hb_2
+
+    rhs2, L_f_h2, _ = cbf2.h_b_r2_RHS(h_2, L_f_h_2, L_f_2_h_2, cbf_gain)
 
     # Define Q matrix: Minimize ||u||^2 and slack (penalty*delta^2)
     Q = jnp.array([
@@ -107,6 +114,7 @@ def solve_qp(b):
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 
         [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
+        [-Lg_Lf_h_2.flatten()[0].astype(float), 0.0], # 2nd CBF
         [1, 0],
         [0, 1]
     ])
@@ -114,6 +122,7 @@ def solve_qp(b):
     u = jnp.hstack([
         (-L_f_V - clf_gain * V).squeeze(),          # CLF constraint
         (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
+        (rhs2).squeeze(),                           # 2nd CBF constraint
         u_max, 
         jnp.inf # no upper limit on slack
     ])
@@ -121,18 +130,18 @@ def solve_qp(b):
     l = jnp.hstack([
         -jnp.inf, # No lower limit on CLF condition
         -jnp.inf, # No lower limit on CBF condition
+        -jnp.inf, # 2nd CBF
         -u_max,
         0.0 # slack can't be negative
     ])
 
     if not CBF_ON:
-        A = jnp.delete(A, 1, axis=0)  # Remove 2nd row
-        u = jnp.delete(u, 1)          # Remove corresponding element in u
-        l = jnp.delete(l, 1)          # Remove corresponding element in l
+        A = jnp.concatenate([A[:1], A[3:]], axis=0) # Remove CBF conditions
+        u = jnp.concatenate([u[:1], u[3:]], axis=0)        # Remove corresponding element in u
+        l = jnp.concatenate([l[:1], l[3:]], axis=0)         # Remove corresponding element in l
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
-    # return sol, V, h, L_g_V, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b
     return sol, V
 
 x_traj = []  # Store trajectory
@@ -146,12 +155,26 @@ covariances = []
 in_covariances = [] # Innovation Covariance of EKF
 prob_leave = [] # Probability of leaving safe set
 
+x_nom = [] # Store nominal trajectory
+
 x_estimated, p_estimated = estimator.get_belief()
 
 x_measured = x_initial_measurement
-x_meas.append(x_measured)
 
 solve_qp_cpu = jit(solve_qp, backend='cpu')
+
+goal_loc = x_init[0:2]
+
+t_vec = jnp.arange(0.0, T + 1.0, 1.0)*dt
+goal_x_nom = sinusoidal_trajectory(t_vec, A=goal[1], omega=1.0, v=lin_vel).T  # shape (T/dt, 2)
+
+plt.figure(figsize=(10, 10))
+plt.plot(goal_x_nom[:, 0], goal_x_nom[:, 1], "Green", label="Nominal Trajectory")
+plt.show()
+plt.pause(0)
+
+traj_idx = 0
+goal_loc = goal_x_nom[traj_idx]
 
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
@@ -160,27 +183,16 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     belief = cbf.get_b_vector(x_estimated, p_estimated)
 
-    # Solve QP
-    # sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp_cpu(belief)
-    # sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp(belief)
-    sol, V = solve_qp_cpu(belief)
-    # sol, V = solve_qp(belief)
+    # target_goal_loc = sinusoidal_trajectory(t*dt, A=goal[1], omega=1.0, v=lin_vel)
 
-    # DEBUGGING
-    # list_lgv.append(LgV)
-    # list_Lg_Lf_h.append(Lg_Lf_h)
-    # list_rhs.append(rhs)
-    # list_L_f_h.append(L_f_h)
-    # list_L_f_2_h.append(L_f_2_h)
-    # list_grad_h_b.append(grad_h_b)
-    # list_f_b.append(f_b)
+    sol, V = solve_qp_cpu(belief, goal_loc)
+    # sol, V = solve_qp(belief, goal_loc)
 
     clf_values.append(V)
     # cbf_values.append(h)
 
     u_sol = jnp.array([sol.primal[0][0]])
     u_opt = jnp.clip(u_sol, -u_max, u_max)
-
 
     # Apply control to the true state (x_true)
     x_true = x_true + dt * dynamics.x_dot(x_true, u_opt)
@@ -200,8 +212,6 @@ for t in tqdm(range(T), desc="Simulation Progress"):
         if estimator.name == "EKF":
             estimator.update(x_measured)
 
-        x_meas.append(x_measured)
-
         # prob_leave.append(estimator.compute_probability_bound(alpha, delta))
     # else:
     #     if len(prob_leave) > 0:
@@ -211,12 +221,23 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     x_estimated, p_estimated = estimator.get_belief()
 
+
+    if (x_estimated[1] < wall_y and x_estimated[1] > -wall_y):
+        eta = 7.0
+    else:
+        eta = 15.0
+
+    traj_idx = update_trajectory_index(x_estimated[0:2], goal_x_nom, traj_idx, eta=eta)
+    goal_loc = goal_x_nom[traj_idx]
+
     # Store for plotting
     u_traj.append(u_opt)
+    x_meas.append(x_measured)
     x_est.append(x_estimated)
     kalman_gains.append(estimator.K)
     covariances.append(p_estimated)
     in_covariances.append(estimator.in_cov)
+    x_nom.append(goal_loc)
 
 # Convert to JAX arrays
 x_traj = jnp.array(x_traj)
@@ -226,44 +247,26 @@ x_traj = np.array(x_traj).squeeze()
 x_meas = np.array(x_meas).squeeze()
 x_est = np.array(x_est).squeeze()
 
-time = dt*np.arange(T)
+x_nom = np.array(x_nom).squeeze()
+np.savetxt("x_nom.csv", x_nom, delimiter=",")
+
+time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
 # Plot trajectory with y-values set to zero
 plt.figure(figsize=(10, 10))
-# plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
-plt.scatter(x_meas[:, 0], x_meas[:, 1], color="Green", marker="o", s=5, label="Measured", alpha=0.5)
+plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
 plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
 plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
+plt.plot(x_nom[:, 0], x_nom[:, 1], "Green", label="Nominal Trajectory")
 plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
-plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
+plt.axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
+# plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
 # plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
 plt.xlabel("x", fontsize=14)
 plt.ylabel("y", fontsize=14)
-plt.title("2D System Trajectory", fontsize=14)
+plt.title("2D X-Trajectory (CLF-CBF QP-Controlled)", fontsize=14)
 plt.legend()
 plt.grid()
-plt.show()
-
-# Dimension-wise trajectory plotting
-state_labels = ["x", "y", "v", "theta"]
-T = x_traj.shape[0]
-meas_indices = np.arange(0, T, 1/sensor_update_frequency)
-
-plt.figure(figsize=(12, 10))
-for i in range(4):
-    plt.subplot(2, 2, i + 1)
-    plt.plot(range(T), x_traj[:, i], label="True", color="blue")
-    plt.plot(range(T), x_est[:, i], label="Estimated", color="orange")
-    # plt.plot(range(T), x_meas[:, i], label="Measured", color="green", linestyle=":", alpha=0.5)
-    plt.scatter(meas_indices, x_meas[:, i], color="Green", marker="o", s=5, label="Measured", alpha=0.5)
-    plt.xlabel("Time step", fontsize=12)
-    plt.ylabel(state_labels[i], fontsize=12)
-    plt.title(f"{state_labels[i]} vs Time", fontsize=12)
-    plt.grid()
-    if i == 0:
-        plt.legend()
-
-plt.tight_layout()
 plt.show()
 
 # # Plot controls
