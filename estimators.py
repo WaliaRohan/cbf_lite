@@ -26,24 +26,26 @@ class EKF:
 
         # Initialize observation function as identity function
         if h is None:
-            self.h = lambda x: x
+            self.h = lambda x: x.ravel()
         else:
             self.h = h
 
     def predict(self, u):
-        """Predict step of EKF."""
+        """
+        Predict step of EKF.
+        
+        See (Page 274, Table 5.1, Optimal and Robust Estimation)
+        """
         # Nonlinear state propagation
-        # self.x_hat = self.x_hat + self.dt * (self.dynamics.f(self.x_hat) + self.dynamics.g(self.x_hat) @ u)
         self.x_hat = self.x_hat + self.dt * self.dynamics.x_dot(self.x_hat, u)
 
         # Compute Jacobian of dynamics (linearization)
-        # F_x = jax.jacobian(lambda x: x + self.dt * (self.dynamics.f(x) + self.dynamics.g(x) @ u))(self.x_hat)
         F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
 
-        # Covariance udpate  (Page 274, Table 5.1, Optimal and Robust Estimation)
-        # self.P = F_x @ self.P @ F_x.T + self.Q
-        # P_dot = (F @ self.P + F.T @ self.P).squeeze() + self.Q
-        P_dot = F.squeeze() @ self.P + self.P @ F.squeeze().T + self.Q
+        # Covariance udpate 
+        if len(F.shape) > 2: 
+            F = F.squeeze()
+        P_dot = F @ self.P + self.P @ F.T + self.Q
         self.P = self.P + P_dot*self.dt
 
     def update(self, z):
@@ -53,10 +55,13 @@ class EKF:
         Args:
             z (): Measurement
         """
-        # H_x Jacobian of measurement function wrt state vector (identity for full state observation)
-        # H_x = jnp.array([[0.0, 1.0, 0.0, 0.0]])# can only observe y
-
-        H_x = jax.jacfwd(self.h)(self.x_hat)
+        # H_x Jacobian of measurement function wrt state vector
+        H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
+        """
+        NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
+        state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
+        """
+        
         obs_dim = len(H_x) # Number of rows in H_X == observation space dim
 
         z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
@@ -81,10 +86,10 @@ class EKF:
         # Update state estimate
         self.x_hat = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # Order of K and y in multiplication matters!
 
-        self.sigma_minus = self.P # for computing probability bound
+        self.sigma_minus = self.P # For computing probability bound
 
         # Update covariance
-        self.P = (jnp.eye(max(z.shape)) - self.K @ H_x) @ self.P
+        self.P = (jnp.eye(max(self.x_hat.shape)) - self.K @ H_x) @ self.P
 
     def get_belief(self):
         """Return the current belief (state estimate)."""
@@ -144,17 +149,21 @@ class GEKF:
             self.h = h
 
     def predict(self, u):
-        """Predict step of EKF."""
+        """
+        Same as predict step of EKF.
+        
+        See (Page 274, Table 5.1, Optimal and Robust Estimation)        
+        """
         # Nonlinear state propagation
         self.x_hat = self.x_hat + self.dt * self.dynamics.x_dot(self.x_hat, u)
 
         # Compute Jacobian of dynamics (linearization)
         F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
 
-        # Covariance udpate  (Page 274, Table 5.1, Optimal and Robust Estimation)
-        # P_dot = F @ self.P + self.P@ (F.T) + self.Q
-        # P_dot = (F @ self.P + F.T @ self.P).squeeze() + self.Q
-        P_dot = F.squeeze() @ self.P + self.P @ F.squeeze().T + self.Q
+        # Covariance udpate
+        if len(F.shape) > 2: 
+            F = F.squeeze()
+        P_dot = F @ self.P + self.P @ F.T + self.Q
 
         self.P = self.P + P_dot*self.dt
 
@@ -167,12 +176,14 @@ class GEKF:
         sigma_u = self.sigma_u
         mu_v = self.mu_v
 
-        H_x = jax.jacfwd(self.h)(self.x_hat)
-        obs_dim = len(H_x) # Number of rows in H_X == observation space dim
+        # H_x Jacobian of measurement function wrt state vector
+        H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
+        """
+        NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
+        state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
+        """
 
-        # Perfect state observation
-        # h_z = self.x_hat
-        # dhdx = jnp.eye(self.dynamics.state_dim)
+        obs_dim = len(H_x) # Number of rows in H_X == observation space dim
 
         z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
 

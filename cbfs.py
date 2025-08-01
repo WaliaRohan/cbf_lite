@@ -132,9 +132,9 @@ def clf_1D_doubleint(state, goal):
     #     MU: Helps in convergence to goal when system is near it. Near the goal, the "diff" (see below) might be close to zero. So this
               # relies on velocity to help the system reach the goal. 
 
-    GAMMA = 475 # 5 
-    LAMBDA = 0.25 # 1
-    MU = 30.0 # 1 
+    GAMMA = 2.4
+    LAMBDA = 1.0
+    MU = 1.0 
     lyap = (GAMMA*diff + LAMBDA*x_dot)**2 + MU*x_dot**2
 
     return lyap[0]
@@ -163,7 +163,7 @@ class BeliefCBF:
         delta: probability of failure (we want the system to have a probability of failure less than delta)
         n: dimension of the state space
         """
-        self.alpha = alpha.reshape(-1, 1)
+        self.alpha = alpha.reshape(-1, 1) # reshape into column vector
         self.beta = beta
         self.delta = delta
         self.n = n
@@ -187,7 +187,7 @@ class BeliefCBF:
         upper_triangular_indices = jnp.triu_indices(sigma.shape[0])
         vec_sigma = sigma[upper_triangular_indices]
 
-        b = jnp.concatenate([mu.squeeze(), vec_sigma])
+        b = jnp.concatenate([mu.flatten(), vec_sigma]) # mu.squeeze() would not work for shapes of size (1, 1) (it deletes all 1 dimensions). mu.flatten() makes final shape (n, ), regardless of original shape. 
 
         return b
     
@@ -213,29 +213,31 @@ class BeliefCBF:
             
             sigma_matrix: f_sigma or g_sigma
             """
-            shape = sigma_matrix.shape  # G_sigma is (n, m, n)
-            n = shape[0]
-            m = shape[1]
 
-            # Create indices for the upper triangular part
-            tri_indices = jnp.triu_indices(n)
+            if sigma_matrix.shape == (1, 1):
+                return sigma_matrix.flatten()
 
-            # Extract upper triangular elements from each m-th slice
-            sigma_vector = jnp.array([sigma_matrix[:, j][tri_indices] for j in range(m)]).T  # Shape (k, m)
-            
-            return sigma_vector
+            else:
+                shape = sigma_matrix.shape  # G_sigma is (n, m, n)
+                n = shape[0]
+                m = shape[1]
 
+                # Create indices for the upper triangular part
+                tri_indices = jnp.triu_indices(n)
+
+                # Extract upper triangular elements from each m-th slice
+                sigma_vector = jnp.array([sigma_matrix[:, j][tri_indices] for j in range(m)]).T # TODO: Check if this is valid for m > 1
+                
+                return sigma_vector
 
         def f_b(b):
             # Time update evaluated at mean
             f_vector = dynamics.f(b[:self.n]) 
 
-            # Covariance update evaluated at mean
-            A_f = jax.jacfwd(dynamics.f)(b[:self.n])
-            # f_sigma = A_f@sigma + sigma@(A_f.T) + dynamics.Q
-            f_sigma = A_f @ sigma + A_f.T @ sigma # Add noise (dynamics.Q) later
-            # upper_triangular_indices = jnp.triu_indices(f_sigma.shape[0])
-            # f_sigma_vector = f_sigma[upper_triangular_indi?ces]
+            # Calculate A_f: This splitting of A into A_f is possible because sigma dot is control affine - see para after eq 43 in "Belief Space Planning ..." by Nishimura and Schwager
+            A_f = jax.jacfwd(dynamics.f)(b[:self.n]) # jacfwd returns jacobian
+            # Continuous time update - Optimal and Robust Control, Page 154, Eq 3.21
+            f_sigma = A_f @ sigma + A_f.T @ sigma # Add noise (dynamics.Q) later -> Does it even matter if we're ultimately calculating dh/db (eq 19, BCBF paper)
             f_sigma_vector = extract_sigma_vector(f_sigma)
             
             # "f" portion of belief vector
@@ -251,22 +253,22 @@ class BeliefCBF:
                 n = shape[0]
                 m = shape[1]
 
-
                 # Create indices for the upper triangular part
                 tri_indices = jnp.triu_indices(n)
 
                 # Extract upper triangular elements from each m-th slice
-                g_sigma = jnp.array([G_sigma[:, j][tri_indices] for j in range(m)]).T  # Shape (k, m)
+                g_sigma = jnp.array([G_sigma[:, j][tri_indices] for j in range(m)]).T # TODO: Check if this is valid for m > 1
                 
                 return g_sigma
 
             # Control influence on mean
             g_matrix = dynamics.g(b[:self.n])
             
-            # Covariance update term
-            A_g = jax.jacfwd(dynamics.g)(b[:self.n]) # Squeeze added later
+            # Calculate A_g: This splitting of A into A_g is possible because sigma dot is control affine - see para after eq 43 in "Belief Space Planning ..." by Nishimura and Schwager
+            A_g = jax.jacfwd(dynamics.g)(b[:self.n]) # jacfwd returns jacobian
             # A_g = A_g.transpose(0, 2, 1) # nxnxm -> Remove if this is giving incorrect results (belief cbf was working for 2d dynamics before this was added for 4x1 dubins)
-            g_sigma = A_g @ sigma + (A_g.T)@sigma  # No Q -> accounted for in f
+            # Continuous time update - Optimal and Robust Control, Page 154, Eq 3.21
+            g_sigma = A_g @ sigma + (A_g.T)@sigma  # No Q -> see "f_b" above
             g_sigma_vector = extract_g_sigma(g_sigma)
 
             # "g" portion of belief vector
@@ -298,7 +300,7 @@ class BeliefCBF:
 
                 where:
                     h_dot = LfH
-                    h: position-based Belief Barrier Function constraint
+                    h: position-based Belief Control Barrier Function constraint
 
         This function calculates the right-hand-side (RHS) of the following
         resulting QP linear inequality:
@@ -313,8 +315,6 @@ class BeliefCBF:
         
         """        
         roots = jnp.array([-0.75]) # Manually select root to be in left half plane
-        # polynomial = np.poly1d(roots, r=True)
-        # coeff = jnp.array(polynomial.coeffs)
         coeff = cbf_gain*jnp.poly(roots)
 
         # jax.debug.print("Value: {}", coeff)

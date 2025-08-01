@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 5000 # 5000
+T = 10000 # 5000
 dynamics = DubinsDynamics()
 
 # Sensor Params
@@ -41,8 +41,8 @@ x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_n
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
 h = lambda x: jnp.array([x[1]])
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
+# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
+estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -56,7 +56,7 @@ u_max = 5.0
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 100.0
 cbf_gain = 10.0  # CBF linear gain
-CBF_ON = False
+CBF_ON = True
 
 # Autodiff: Compute Gradients for CLF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -148,6 +148,7 @@ prob_leave = [] # Probability of leaving safe set
 x_estimated, p_estimated = estimator.get_belief()
 
 x_measured = x_initial_measurement
+x_meas.append(x_measured)
 
 solve_qp_cpu = jit(solve_qp, backend='cpu')
 
@@ -198,6 +199,8 @@ for t in tqdm(range(T), desc="Simulation Progress"):
         if estimator.name == "EKF":
             estimator.update(x_measured)
 
+        x_meas.append(x_measured)
+
         # prob_leave.append(estimator.compute_probability_bound(alpha, delta))
     # else:
     #     if len(prob_leave) > 0:
@@ -209,7 +212,6 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     # Store for plotting
     u_traj.append(u_opt)
-    x_meas.append(x_measured)
     x_est.append(x_estimated)
     kalman_gains.append(estimator.K)
     covariances.append(p_estimated)
@@ -220,14 +222,15 @@ x_traj = jnp.array(x_traj)
 
 # Convert to numpy arrays for plotting
 x_traj = np.array(x_traj).squeeze()
-# x_meas = np.array(x_meas).squeeze()
+x_meas = np.array(x_meas).squeeze()
 x_est = np.array(x_est).squeeze()
 
-time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
+time = dt*np.arange(T)
 
 # Plot trajectory with y-values set to zero
 plt.figure(figsize=(10, 10))
-# plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory")
+# plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
+plt.scatter(x_meas[:, 0], x_meas[:, 1], color="Green", marker="o", s=5, label="Measured", alpha=0.5)
 plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
 plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
 plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
@@ -235,9 +238,31 @@ plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="G
 # plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
 plt.xlabel("x", fontsize=14)
 plt.ylabel("y", fontsize=14)
-plt.title("2D X-Trajectory (CLF-CBF QP-Controlled)", fontsize=14)
+plt.title("2D System Trajectory", fontsize=14)
 plt.legend()
 plt.grid()
+plt.show()
+
+# Dimension-wise trajectory plotting
+state_labels = ["x", "y", "v", "theta"]
+T = x_traj.shape[0]
+meas_indices = np.arange(0, T, 1/sensor_update_frequency)
+
+plt.figure(figsize=(12, 10))
+for i in range(4):
+    plt.subplot(2, 2, i + 1)
+    plt.plot(range(T), x_traj[:, i], label="True", color="blue")
+    plt.plot(range(T), x_est[:, i], label="Estimated", color="orange")
+    # plt.plot(range(T), x_meas[:, i], label="Measured", color="green", linestyle=":", alpha=0.5)
+    plt.scatter(meas_indices, x_meas[:, i], color="Green", marker="o", s=5, label="Measured", alpha=0.5)
+    plt.xlabel("Time step", fontsize=12)
+    plt.ylabel(state_labels[i], fontsize=12)
+    plt.title(f"{state_labels[i]} vs Time", fontsize=12)
+    plt.grid()
+    if i == 0:
+        plt.legend()
+
+plt.tight_layout()
 plt.show()
 
 # # Plot controls
