@@ -40,8 +40,8 @@ x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_n
 # x_initial_measurement = sensor(x_true, t=0, std=sigma_v) # unbiased_fixed_noise
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
-# h = lambda x: jnp.array([x[1]])
-h = None
+h = lambda x: jnp.array([x[1]])
+# h = None
 estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
 # estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
@@ -101,8 +101,7 @@ def solve_qp(b):
         [0, 2*clf_slack_penalty]
     ])
     
-    # c = jnp.zeros(2)  # No linear cost term
-    c = jnp.array([-1.0, 0.0])
+    c = jnp.zeros(2)  # No linear cost term
 
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 

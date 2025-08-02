@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-import mplcursors  # for enabling data cursor in matplotlib plots
+# import mplcursors  # for enabling data cursor in matplotlib plots
 import numpy as np
 from jax import grad, jit
 from jaxopt import BoxOSQP as OSQP
@@ -100,8 +100,7 @@ def solve_qp(b):
         [0, 2*clf_slack_penalty]
     ])
     
-    # c = jnp.zeros(2)  # No linear cost term
-    c = jnp.array([-1.0, 0.0])
+    c = jnp.zeros(2)  # No linear cost term
 
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 

@@ -108,8 +108,7 @@ def solve_qp(b, goal_loc):
         [0, 2*clf_slack_penalty]
     ])
     
-    # c = jnp.zeros(2)  # No linear cost term
-    c = jnp.array([-1.0, 0.0])
+    c = jnp.zeros(2)  # No linear cost term
 
     A = jnp.array([
         [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 
