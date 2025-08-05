@@ -76,12 +76,11 @@ def vanilla_clf_dubins_2D(state, goal):
 def vanilla_clf_x(state, goal):
     return ((state[0] - goal[0])**2).squeeze()
 
-def vanilla_clf_dubins(state, goal):
-    x = state[0]
+def vanilla_clf_dubins_y(state, goal):
     y = state[1]
-    theta = state[2]
-    v = state[3]
-
+    v = state[2]
+    theta = state[3]
+    
     x_dot = v*jnp.cos(theta)
     y_dot = v*jnp.sin(theta)
 
@@ -95,9 +94,9 @@ def vanilla_clf_dubins(state, goal):
     Kv = 0.5
     
     num = Kv*lyap + (y*y_dot)**2 + y_dot**2
-    den = 1e-6 + (y*x_dot)**2
+    den = (y*x_dot)**2
 
-    V = num/den
+    V = num
 
     return V
 
@@ -280,7 +279,8 @@ class BeliefCBF:
             return jnp.reshape(grad_h_b(b) @ f_b(b), ())
         
         def L_g_h(b):
-            return jnp.reshape(grad_h_b(b) @ g_b(b), ())
+            # return jnp.reshape(grad_h_b(b) @ g_b(b), ())
+            return grad_h_b(b) @ g_b(b)
         
         def L_f_2_h(b):
             return jax.grad(L_f_h)(b) @ f_b(b)
