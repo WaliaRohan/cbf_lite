@@ -165,21 +165,21 @@ class DubinsDynamics:
         return jnp.array([
             [v * jnp.cos(theta)],  # x_dot
             [v * jnp.sin(theta)],  # y_dot
-            [jnp.zeros_like(v)],   # v_dot (velocity is constant)
+            [jnp.zeros_like(v)],   # no drift in velocity
             [jnp.zeros_like(theta)]    # theta_dot (no drift)
         ])
-
+        
     def g(self, x):
         """
         Compute the control matrix g(x).
         
-        Control u = [heading rate omega]
+        Control u = [lin_vel, ang_vel]
         """
         return jnp.array([
-            [0],  # No control influence on x
-            [0],  # No control influence on y
-            [0],  # No control influence on velocity
-            [1]   # Control directly affects theta (heading)
+            [0, 0],  # No control influence on x
+            [0, 0],  # No control influence on y
+            [1, 0],  # v_dot
+            [0, 1]   # theta_dot
         ])
 
     def x_dot(self, x, u):
