@@ -91,7 +91,7 @@ def vanilla_clf_dubins_y(state, goal):
 
     lyap = 0.5*e_y**2
 
-    Kv = 2.0
+    Kv = 5.0
     
     num = Kv*lyap + (y*y_dot)**2 + y_dot**2
     den = (y*x_dot)**2
