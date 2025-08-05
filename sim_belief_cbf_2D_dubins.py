@@ -8,7 +8,7 @@ from jaxopt import BoxOSQP as OSQP
 from tqdm import tqdm
 
 from cbfs import BeliefCBF
-from cbfs import vanilla_clf_dubins as clf
+from cbfs import vanilla_clf_dubins_y as clf
 from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000
+T = 20000
 dynamics = DubinsDynamics()
 
 # Sensor Params
@@ -26,16 +26,15 @@ mu_v = 0.001
 sigma_v = jnp.sqrt(0.0005) # Standard deviation
 sensor_update_frequency = 0.1 # Hz
 
-# Obstacle
-wall_y = 2.5
-x_init = [0.0, 0.0, 1.0, 0.0] # x, y, v, theta
-
-# Initial state (truth)
-x_true = jnp.array(x_init)  # Start position
-goal = 3.0*jnp.array([1.0, 1.0])  # Goal position
+# State initialization, goal and constraints
+wall_y = 1.0
+goal = 1.5*jnp.array([1.0, 1.0])  # Goal position
 obstacle = jnp.array([wall_y])  # Wall
 
-# Mean and covariance
+x_init = [0.0, 0.0, 1.0, 0.0] # x, y, v, theta
+x_true = jnp.array(x_init)  # Start position
+
+# Sensor and estimator initialization
 x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_noise
 # x_initial_measurement = sensor(x_true, t=0, std=sigma_v) # unbiased_fixed_noise
 # Observation function: Return second and 4rth element of the state vector
@@ -52,12 +51,20 @@ beta = jnp.array([-wall_y])
 delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
+# Dynamic constraints
+wheelbase = 0.165 # Wheelbase - measured directly from deepracer
+max_steering_angle = 0.8 # rad (little over 45 deg)
+r_min = wheelbase/jnp.tan(max_steering_angle) # min turning radius for this angle
+
 # Control params
-u_max = 5.0
+lin_vel = 15.0 # m/s
+ang_vel = 0.3 # rad/s -> This is filtered later based on min turning radius
+u_max = jnp.array([lin_vel, ang_vel])
+m = len(u_max)
 clf_gain = 20.0 # CLF linear gain
-clf_slack_penalty = 100.0
+clf_slack_penalty = 10.0
 cbf_gain = 10.0  # CBF linear gain
-CBF_ON = True
+CBF_ON = False
 
 # Autodiff: Compute Gradients for CLF
 grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -95,20 +102,31 @@ def solve_qp(b):
 
     rhs, L_f_h, h_gain = cbf.h_b_r2_RHS(h, L_f_h, L_f_2_h, cbf_gain)
 
-    # Define Q matrix: Minimize ||u||^2 and slack (penalty*delta^2)
-    Q = jnp.array([
-        [1, 0],
-        [0, 2*clf_slack_penalty]
-    ])
-    
-    c = jnp.zeros(2)  # No linear cost term
+    var_dim = m + 1
 
-    A = jnp.array([
-        [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 
-        [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
-        [1, 0],
-        [0, 1]
+    # Define Q matrix: Minimize ||u||^2 and slack (penalty*delta^2)
+    Q = jnp.eye(var_dim)
+    Q = Q.at[-1, -1].set(2*clf_slack_penalty)
+
+    # Q = jnp.array([
+    #     [1, 0],
+    #     [0, 2*clf_slack_penalty]
+    # ])
+    
+    c = jnp.zeros(var_dim)  # No linear cost term
+
+    # A = jnp.array([
+    #     [L_g_V.flatten()[0].astype(float), -1.0], #  LgV u - delta <= -LfV - gamma(V) 
+    #     [-Lg_Lf_h.flatten()[0].astype(float), 0.0], # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
+    #     [1, 0],
+    #     [0, 1]
+    # ])
+    A = jnp.vstack([
+        jnp.concatenate([L_g_V, jnp.array([-1.0])]), #  LgV u - delta <= -LfV - gamma(V) 
+        jnp.concatenate([-Lg_Lf_h, jnp.array([0.0])]), # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
+        jnp.eye(var_dim)
     ])
+
 
     u = jnp.hstack([
         (-L_f_V - clf_gain * V).squeeze(),          # CLF constraint
@@ -177,9 +195,14 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     clf_values.append(V)
     # cbf_values.append(h)
 
-    u_sol = jnp.array([sol.primal[0][0]])
+    u_sol = sol.primal[0][:2]
     u_opt = jnp.clip(u_sol, -u_max, u_max)
 
+    # Clip ang_vel based on min turning radius
+    # theta_est = x_estimated[-1]
+    # vel_des = u_opt[0]
+    # w_max = vel_des*jnp.tan(max_steering_angle)/(wheelbase) # Comes from time derivative of r_min = L/tan(max_steering_angle)
+    # u_opt = u_opt.at[1].set(jnp.clip(u_opt[1], -w_max, w_max))
 
     # Apply control to the true state (x_true)
     x_true = x_true + dt * dynamics.x_dot(x_true, u_opt)
@@ -217,13 +240,11 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     covariances.append(p_estimated)
     in_covariances.append(estimator.in_cov)
 
-# Convert to JAX arrays
-x_traj = jnp.array(x_traj)
-
 # Convert to numpy arrays for plotting
 x_traj = np.array(x_traj).squeeze()
 x_meas = np.array(x_meas).squeeze()
 x_est = np.array(x_est).squeeze()
+u_traj = np.array(u_traj)
 
 time = dt*np.arange(T)
 
@@ -265,18 +286,17 @@ for i in range(4):
 plt.tight_layout()
 plt.show()
 
-# # Plot controls
+# Plot controls
 plt.figure(figsize=(10, 10))
 # plt.plot(time, np.array(cbf_values), color='red', label="CBF")
 # plt.plot(time, np.array(clf_values), color='green', label="CLF")
-plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
+for i in range(m):
+    plt.plot(time, u_traj[:, i], label=f"u_{i}")
 plt.xlabel("Time step (s)")
-plt.ylabel("Value")
+plt.ylabel("Control value")
 plt.title(f"Control Values ({estimator.name})")
-# Tick labels font size
 plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
-# Legend font size
 plt.legend(fontsize=14)
 plt.show()
 
@@ -386,6 +406,10 @@ print("\n--- Control Parameters ---")
 print(f"CLF Linear Gain (clf_gain): {clf_gain}")
 print(f"CLF Slack (clf_slack): {clf_slack_penalty}")
 print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
+if CBF_ON:
+    print("CBF: ON")
+else:
+    print("CBF: OFF")
 
 # Print Metrics
 
