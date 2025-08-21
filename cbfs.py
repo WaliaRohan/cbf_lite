@@ -1,7 +1,8 @@
 import jax
 import jax.numpy as jnp
-from jax import jacfwd, jacrev, random
-from jax.scipy.special import erfinv
+from jax import random
+from jax.scipy.stats import norm
+from functools import partial
 
 
 def sinusoidal_trajectory(t, A=1.0, omega=1.0, v=1.0, phase=0.0):
@@ -76,6 +77,7 @@ def vanilla_clf_dubins_2D(state, goal):
 def vanilla_clf_x(state, goal):
     return ((state[0] - goal[0])**2).squeeze()
 
+# @jit
 def vanilla_clf_dubins(state, goal):
     y = state[1]
     v = state[2]
@@ -166,6 +168,7 @@ class BeliefCBF:
         self.beta = beta
         self.delta = delta
         self.n = n
+        self.triu_r, self.triu_c = jnp.triu_indices(self.n)  # precompute once
 
     def extract_mu_sigma(self, b):
         mu = b[:self.n]  # Extract mean vector
@@ -179,25 +182,42 @@ class BeliefCBF:
 
         return mu, sigma
     
-    # @jit
+    @partial(jax.jit, static_argnums=0)   # treat `self` as static
     def get_b_vector(self, mu, sigma):
+        vec_sigma = sigma[self.triu_r, self.triu_c]         # gather
+        return jnp.concatenate([mu.reshape(-1), vec_sigma]) # (n + n(n+1)/2,)
 
-        # Extract the upper triangular elements of a matrix as a 1D array
-        upper_triangular_indices = jnp.triu_indices(sigma.shape[0])
-        vec_sigma = sigma[upper_triangular_indices]
 
-        b = jnp.concatenate([mu.flatten(), vec_sigma]) # mu.squeeze() would not work for shapes of size (1, 1) (it deletes all 1 dimensions). mu.flatten() makes final shape (n, ), regardless of original shape. 
-
-        return b
-    
     def h_b(self, b):
-        """Computes h_b(b) given belief state b = [mu, vec_u(Sigma)]"""
+        '''
+        Computes CVaR belief CBF for a Multivariate Guassian Random Variable Y
+
+        Reference: Calculating CVaR and bPOE for Common Probability Distributions With Application to Portfolio 
+                   Optimization and Density Estimation  Matthew Norton · Valentyn Khokhlov · Stan Uryasev
+        '''
+
         mu, sigma = self.extract_mu_sigma(b)
 
-        term1 = jnp.dot(self.alpha.T, mu) - self.beta
-        term2 = jnp.sqrt(2 * jnp.dot(self.alpha.T, jnp.dot(sigma, self.alpha))) * erfinv(1 - 2 * self.delta)
+        mu_mod = jnp.dot(self.alpha.T, mu) - self.beta
+        sigma_mod = jnp.sqrt(self.alpha.T @ sigma @ self.alpha) # sigma_mod is sd, whereas sigma is cov
+
+        q_alpha = norm.ppf(self.delta) # delta quantile of standard normal distribution
+
+        f = norm.pdf(q_alpha)
+
+        CVaR = mu_mod - (sigma_mod*f)/self.delta # THIS IS FOR THE LOWER LEFT QUANTILE, DIFFERENT FROM bPOE SOURCE BUT CONSISTENT WITH BCBF
+
+        return CVaR.squeeze() # Convert from array to float
+
+    # def h_b(self, b):
+    #     """Computes h_b(b) given belief state b = [mu, vec_u(Sigma)]"""
+    #     mu, sigma = self.extract_mu_sigma(b)
+
+    #     term1 = jnp.dot(self.alpha.T, mu) - self.beta
+    #     term2 = jnp.sqrt(2 * jnp.dot(self.alpha.T, jnp.dot(sigma, self.alpha))) * erfinv(1 - 2 * self.delta)
         
-        return (term1 - term2).squeeze()  # Convert from array to float
+    #     return (term1 - term2).squeeze()  # Convert from array to float
+    # This entire function can be replaced by: term1 + jnp.sqrt(jnp.dot(self.alpha.T, jnp.dot(sigma, self.alpha))) * norm.ppf(self.delta))
     
     def h_dot_b(self, b, dynamics):
 
