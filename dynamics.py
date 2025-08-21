@@ -1,4 +1,6 @@
 import jax.numpy as jnp
+from functools import partial
+import jax
 
 class SingleIntegrator1D:
     """1D Single Integrator Dynamics with Drift: dx/dt = a * x + u"""
@@ -182,9 +184,13 @@ class DubinsDynamics:
             [1]   # Control directly affects theta (heading)
         ])
 
+    @partial(jax.jit, static_argnums=0)
     def x_dot(self, x, u):
         """Total dynamics: dx/dt = f(x) + g(x)u"""
 
         # Reshape u to ensure it has atleast 1 column
         return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
+
+
+
     

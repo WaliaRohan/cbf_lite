@@ -16,8 +16,9 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000
+T = 40000
 dynamics = DubinsDynamics()
+report_results = True
 
 # Sensor Params
 mu_u = 0.1
@@ -132,6 +133,7 @@ def solve_qp(b):
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
     # return sol, V, h, L_g_V, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b
+
     return sol, V
 
 x_traj = []  # Store trajectory
@@ -151,10 +153,10 @@ x_measured = x_initial_measurement
 x_meas.append(x_measured)
 
 solve_qp_cpu = jit(solve_qp, backend='cpu')
+solve_qp_gpu = jit(solve_qp, backend='gpu')
 
 # Simulation loop
 for t in tqdm(range(T), desc="Simulation Progress"):
-
     x_traj.append(x_true)
 
     belief = cbf.get_b_vector(x_estimated, p_estimated)
@@ -164,6 +166,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     # sol, V, h, LgV, Lg_Lf_h, rhs, L_f_h, L_f_2_h, grad_h_b, f_b = solve_qp(belief)
     sol, V = solve_qp_cpu(belief)
     # sol, V = solve_qp(belief)
+    # sol, V = solve_qp_gpu(belief)
 
     # DEBUGGING
     # list_lgv.append(LgV)
@@ -217,188 +220,191 @@ for t in tqdm(range(T), desc="Simulation Progress"):
     covariances.append(p_estimated)
     in_covariances.append(estimator.in_cov)
 
-# Convert to JAX arrays
-x_traj = jnp.array(x_traj)
+if report_results:
 
-# Convert to numpy arrays for plotting
-x_traj = np.array(x_traj).squeeze()
-x_meas = np.array(x_meas).squeeze()
-x_est = np.array(x_est).squeeze()
+    # Convert to JAX arrays
+    x_traj = jnp.array(x_traj)
 
-time = dt*np.arange(T)
+    # Convert to numpy arrays for plotting
+    x_traj = np.array(x_traj).squeeze()
+    x_meas = np.array(x_meas).squeeze()
+    x_est = np.array(x_est).squeeze()
 
-# Plot trajectory with y-values set to zero
-plt.figure(figsize=(10, 10))
-# plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
-plt.scatter(x_meas[:, 0], x_meas[:, 1], color="Green", marker="o", s=5, label="Measured", alpha=0.5)
-plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
-plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
-plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
-plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
-# plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
-plt.xlabel("x", fontsize=14)
-plt.ylabel("y", fontsize=14)
-plt.title("2D System Trajectory", fontsize=14)
-plt.legend()
-plt.grid()
-plt.show()
+    time = dt*np.arange(T)
 
-# Dimension-wise trajectory plotting
-state_labels = ["x", "y", "v", "theta"]
-T = x_traj.shape[0]
-meas_indices = np.arange(0, T, 1/sensor_update_frequency)
-
-plt.figure(figsize=(12, 10))
-for i in range(4):
-    plt.subplot(2, 2, i + 1)
-    plt.plot(range(T), x_traj[:, i], label="True", color="blue")
-    plt.plot(range(T), x_est[:, i], label="Estimated", color="orange")
-    # plt.plot(range(T), x_meas[:, i], label="Measured", color="green", linestyle=":", alpha=0.5)
-    plt.scatter(meas_indices, x_meas[:, i], color="Green", marker="o", s=5, label="Measured", alpha=0.5)
-    plt.xlabel("Time step", fontsize=12)
-    plt.ylabel(state_labels[i], fontsize=12)
-    plt.title(f"{state_labels[i]} vs Time", fontsize=12)
+    # Plot trajectory with y-values set to zero
+    plt.figure(figsize=(10, 10))
+    # plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
+    plt.scatter(x_meas[:, 0], x_meas[:, 1], color="Green", marker="o", s=5, label="Measured", alpha=0.5)
+    plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
+    plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
+    plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
+    plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
+    # plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
+    plt.xlabel("x", fontsize=14)
+    plt.ylabel("y", fontsize=14)
+    plt.title("2D System Trajectory", fontsize=14)
+    plt.legend()
     plt.grid()
-    if i == 0:
-        plt.legend()
+    plt.show()
 
-plt.tight_layout()
-plt.show()
+    # Dimension-wise trajectory plotting
+    state_labels = ["x", "y", "v", "theta"]
+    T = x_traj.shape[0]
+    meas_indices = np.arange(0, T, 1/sensor_update_frequency)
 
-# # Plot controls
-plt.figure(figsize=(10, 10))
-# plt.plot(time, np.array(cbf_values), color='red', label="CBF")
-# plt.plot(time, np.array(clf_values), color='green', label="CLF")
-plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
-plt.xlabel("Time step (s)")
-plt.ylabel("Value")
-plt.title(f"Control Values ({estimator.name})")
-# Tick labels font size
-plt.xticks(fontsize=14)
-plt.yticks(fontsize=14)
-# Legend font size
-plt.legend(fontsize=14)
-plt.show()
+    plt.figure(figsize=(12, 10))
+    for i in range(4):
+        plt.subplot(2, 2, i + 1)
+        plt.plot(range(T), x_traj[:, i], label="True", color="blue")
+        plt.plot(range(T), x_est[:, i], label="Estimated", color="orange")
+        # plt.plot(range(T), x_meas[:, i], label="Measured", color="green", linestyle=":", alpha=0.5)
+        plt.scatter(meas_indices, x_meas[:, i], color="Green", marker="o", s=5, label="Measured", alpha=0.5)
+        plt.xlabel("Time step", fontsize=12)
+        plt.ylabel(state_labels[i], fontsize=12)
+        plt.title(f"{state_labels[i]} vs Time", fontsize=12)
+        plt.grid()
+        if i == 0:
+            plt.legend()
 
-# Plot CLF (Debug)
-plt.figure(figsize=(10, 10))
-plt.plot(time, np.array(clf_values), color='green', label="CLF")
-# plt.plot(time, list_lgv, color='blue', label="LgV")
-plt.xlabel("Time step (s)")
-plt.ylabel("Value")
-plt.title(f"[Debug] CLF and LgV values ({estimator.name})")
-# Tick labels font size
-plt.xticks(fontsize=14)
-plt.yticks(fontsize=14)
-# Legend font size
-plt.legend(fontsize=14)
-plt.show()
+    plt.tight_layout()
+    plt.show()
 
-# # Plot CBF (Debug)
+    # # Plot controls
+    plt.figure(figsize=(10, 10))
+    # plt.plot(time, np.array(cbf_values), color='red', label="CBF")
+    # plt.plot(time, np.array(clf_values), color='green', label="CLF")
+    plt.plot(time, np.array([u[0] for u in u_traj]), color='blue', label="u_x")
+    plt.xlabel("Time step (s)")
+    plt.ylabel("Value")
+    plt.title(f"Control Values ({estimator.name})")
+    # Tick labels font size
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
+    # Legend font size
+    plt.legend(fontsize=14)
+    plt.show()
 
-# grad_mag = np.array([
-#     np.linalg.norm(np.asarray(g).squeeze()) for g in list_grad_h_b
-# ])
+    # Plot CLF (Debug)
+    plt.figure(figsize=(10, 10))
+    plt.plot(time, np.array(clf_values), color='green', label="CLF")
+    # plt.plot(time, list_lgv, color='blue', label="LgV")
+    plt.xlabel("Time step (s)")
+    plt.ylabel("Value")
+    plt.title(f"[Debug] CLF and LgV values ({estimator.name})")
+    # Tick labels font size
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
+    # Legend font size
+    plt.legend(fontsize=14)
+    plt.show()
 
-# f_mag = np.array([
-#     np.linalg.norm(np.asarray(f).squeeze()) for f in list_f_b
-# ])
+    # # Plot CBF (Debug)
 
-# lfh_vals = np.array([
-#     (grad@fx).squeeze()
-#     for grad, fx in zip(list_grad_h_b, list_f_b)
-# ])
+    # grad_mag = np.array([
+    #     np.linalg.norm(np.asarray(g).squeeze()) for g in list_grad_h_b
+    # ])
 
-# # list_lgv_np = np.array([float(val[0]) for val in list_lgv])
-# plt.figure(figsize=(10, 10))
-# # plt.plot(time, np.array(cbf_values), color='green', label="CBF")
-# # plt.plot(time, list_Lg_Lf_h, color='blue', label="Lg_Lf_h")
-# # plt.plot(time, list_rhs, color='red', label='rhs')
-# plt.plot(time, list_L_f_h, color='purple', label="L_f_h")
-# mplcursors.cursor() 
-# # plt.plot(time, list_L_f_2_h, color='black', label="L_f_2_h")
-# plt.plot(time, grad_mag, color='orange', label="|grad_h_b|")
-# plt.plot(time, f_mag, color='maroon', label="|f_b|")
-# plt.plot(time, lfh_vals, color = 'yellow', label="product")
-# plt.xlabel("Time step (s)")
-# plt.ylabel("Value")
-# plt.title(f"[Debug] CBF and Lg_Lf_h values ({estimator.name})")
-# # Tick labels font size
-# plt.xticks(fontsize=14)
-# plt.yticks(fontsize=14)
-# # Legend font size
-# plt.legend(fontsize=14)
-# plt.show()
+    # f_mag = np.array([
+    #     np.linalg.norm(np.asarray(f).squeeze()) for f in list_f_b
+    # ])
 
-kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-covariance_traces = [jnp.trace(P) for P in covariances]
-inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
+    # lfh_vals = np.array([
+    #     (grad@fx).squeeze()
+    #     for grad, fx in zip(list_grad_h_b, list_f_b)
+    # ])
 
-# # Plot trace of Kalman gains and covariances
-plt.figure(figsize=(10, 10))
-plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-# plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
-# plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
-plt.xlabel("Time Step (s)")
-plt.ylabel("Trace Value")
-plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-plt.legend()
-plt.grid()
-plt.show()
+    # # list_lgv_np = np.array([float(val[0]) for val in list_lgv])
+    # plt.figure(figsize=(10, 10))
+    # # plt.plot(time, np.array(cbf_values), color='green', label="CBF")
+    # # plt.plot(time, list_Lg_Lf_h, color='blue', label="Lg_Lf_h")
+    # # plt.plot(time, list_rhs, color='red', label='rhs')
+    # plt.plot(time, list_L_f_h, color='purple', label="L_f_h")
+    # mplcursors.cursor() 
+    # # plt.plot(time, list_L_f_2_h, color='black', label="L_f_2_h")
+    # plt.plot(time, grad_mag, color='orange', label="|grad_h_b|")
+    # plt.plot(time, f_mag, color='maroon', label="|f_b|")
+    # plt.plot(time, lfh_vals, color = 'yellow', label="product")
+    # plt.xlabel("Time step (s)")
+    # plt.ylabel("Value")
+    # plt.title(f"[Debug] CBF and Lg_Lf_h values ({estimator.name})")
+    # # Tick labels font size
+    # plt.xticks(fontsize=14)
+    # plt.yticks(fontsize=14)
+    # # Legend font size
+    # plt.legend(fontsize=14)
+    # plt.show()
 
-## Probability of leaving safe set
+    kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+    covariance_traces = [jnp.trace(P) for P in covariances]
+    inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 
+    # # Plot trace of Kalman gains and covariances
+    plt.figure(figsize=(10, 10))
+    plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+    plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+    # plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
+    # plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
+    plt.xlabel("Time Step (s)")
+    plt.ylabel("Trace Value")
+    plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+    plt.legend()
+    plt.grid()
+    plt.show()
 
-# # Plot distance from obstacle
-
-# dist = wall_y - x_est
-
-# plt.figure(figsize=(10, 10))
-# plt.plot(time, dist[:, 0], color="red", linestyle="dashed")
-# plt.title(f"Distance from safe boundary ({estimator.name})")
-# plt.xlabel("Time Step (s)")
-# plt.ylabel("Distance")
-# plt.legend()
-# plt.grid()
-# plt.show()
-
-# Print Sim Params
-
-print("\n--- Simulation Parameters ---")
-
-print(dynamics.name)
-print(estimator.name)
-print(f"Time Step (dt): {dt}")
-print(f"Number of Steps (T): {T}")
-print(f"Control Input Max (u_max): {u_max}")
-print(f"Sensor Update Frequency (Hz): {sensor_update_frequency}")
-
-print("\n--- Environment Setup ---")
-print(f"Obstacle Position (wall_y): {wall_y}")
-print(f"Goal Position (goal_x): {goal}")
-print(f"Initial Position (x_init): {x_init}")
-
-print("\n--- Belief CBF Parameters ---")
-print(f"Failure Probability Threshold (delta): {delta}")
-
-print("\n--- Control Parameters ---")
-print(f"CLF Linear Gain (clf_gain): {clf_gain}")
-print(f"CLF Slack (clf_slack): {clf_slack_penalty}")
-print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
-
-# Print Metrics
-
-print("\n--- Results ---")
-
-print("Number of estimate exceedances: ", np.sum(x_est > wall_y))
-print("Number of true exceedences", np.sum(x_traj > wall_y))
-print("Max estimate value: ", np.max(x_est))
-print("Max true value: ", np.max(x_traj))
-print("Mean true distance from obstacle: ", np.mean(wall_y - x_est))
-print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
-print("Cummulative distance to goal: ", np.sum(np.abs(x_traj - wall_y)))
-print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2)))
+    ## Probability of leaving safe set
 
 
-# Plot distance from safety boudary of estimates, max estimate value, 
+    # # Plot distance from obstacle
+
+    # dist = wall_y - x_est
+
+    # plt.figure(figsize=(10, 10))
+    # plt.plot(time, dist[:, 0], color="red", linestyle="dashed")
+    # plt.title(f"Distance from safe boundary ({estimator.name})")
+    # plt.xlabel("Time Step (s)")
+    # plt.ylabel("Distance")
+    # plt.legend()
+    # plt.grid()
+    # plt.show()
+
+    # Print Sim Params
+
+    print("\n--- Simulation Parameters ---")
+
+    print(dynamics.name)
+    print(estimator.name)
+    print(f"Time Step (dt): {dt}")
+    print(f"Number of Steps (T): {T}")
+    print(f"Control Input Max (u_max): {u_max}")
+    print(f"Sensor Update Frequency (Hz): {sensor_update_frequency}")
+
+    print("\n--- Environment Setup ---")
+    print(f"Obstacle Position (wall_y): {wall_y}")
+    print(f"Goal Position (goal_x): {goal}")
+    print(f"Initial Position (x_init): {x_init}")
+
+    print("\n--- Belief CBF Parameters ---")
+    print(f"Failure Probability Threshold (delta): {delta}")
+
+    print("\n--- Control Parameters ---")
+    print(f"CLF Linear Gain (clf_gain): {clf_gain}")
+    print(f"CLF Slack (clf_slack): {clf_slack_penalty}")
+    print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
+
+    # Print Metrics
+
+    print("\n--- Results ---")
+
+    print("Number of estimate exceedances: ", np.sum(x_est[:, 1] > wall_y))
+    print("Number of true exceedances: ", np.sum(x_traj[:, 1] > wall_y))
+    print("Max estimate value: ", np.max(x_est[:, 1]))
+    print("Max true value: ", np.max(x_traj[:, 1]))
+    print("Mean true distance from obstacle: ", np.mean(wall_y - x_est[:, 1]))
+    print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
+    print("Cumulative distance to goal: ", np.sum(np.abs(x_traj[:, 1] - wall_y)))
+    print(f"{estimator.name} Tracking RMSE: ",
+        np.sqrt(np.mean(np.linalg.norm(x_traj - x_est, axis=1) ** 2)))
+
+
+    # Plot distance from safety boudary of estimates, max estimate value, 
