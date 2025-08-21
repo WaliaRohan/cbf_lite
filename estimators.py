@@ -146,9 +146,17 @@ class GEKF:
         else:
             self.h = h
 
-        self.obs_dim = int(jnp.size(h(jnp.zeros(self.dynamics.state_dim))))
-        self.K = jnp.zeros((self.dynamics.state_dim, self.obs_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
+        # H_x Jacobian of measurement function wrt state vector
+        self.H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
+        """
+        NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
+        state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
+        """
 
+        self.obs_dim = len(self.H_x) # Number of rows in H_X == observation space dim
+
+        # self.obs_dim = int(jnp.size(h(jnp.zeros(self.dynamics.state_dim))))
+        self.K = jnp.zeros((self.dynamics.state_dim, self.obs_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
 
     @partial(jax.jit, static_argnums=0)   # treat `self` as static config
     def _predict(self, x_hat, P, u):
@@ -179,14 +187,8 @@ class GEKF:
         sigma_u = self.sigma_u
         mu_v = self.mu_v
 
-        # H_x Jacobian of measurement function wrt state vector
-        H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
-        """
-        NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
-        state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
-        """
-
-        obs_dim = len(H_x) # Number of rows in H_X == observation space dim
+        H_x = self.H_x
+        obs_dim = self.obs_dim
 
         z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
 
@@ -214,20 +216,19 @@ class GEKF:
         self.P = self.P - jnp.matmul(self.K, jnp.transpose(C))
 
     # @partial(jax.jit, static_argnums=0)   # treat `self` as static
-    # def _update(self, x_hat, P, z):
+    # def _update(self, z):
     #     mu_u = self.mu_u
     #     sigma_u = self.sigma_u
     #     mu_v = self.mu_v
-    #     obs_dim = self.obs_dim
 
-    #      # H_x Jacobian of measurement function wrt state vector
+    #     # H_x Jacobian of measurement function wrt state vector
     #     H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
     #     """
     #     NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
     #     state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
     #     """
 
-    #     obs_dim = len(H_x) # Number of rows in H_X == observation space dim
+    #     obs_dim = self.obs_dim
 
     #     z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
 
@@ -246,8 +247,8 @@ class GEKF:
     #     S_term_1 = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx)))  # Perform matrix multiplication
     #     S = S_term_1 + jnp.square(sigma_u)*M + self.R[:obs_dim, :obs_dim]
 
-    #     # K = jnp.matmul(C, jnp.linalg.inv(S))
-    #     K = jnp.linalg.solve(S, C.T).T  
+    #     K = jnp.matmul(C, jnp.linalg.inv(S))
+    #     # K = jnp.linalg.solve(S, C.T).T  
 
     #     # Update state estimate
     #     x_hat_next = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # double transpose because of how state is defined.
@@ -258,7 +259,7 @@ class GEKF:
     #     return x_hat_next, P_next, K
 
     # def update(self, z):
-    #     self.x_hat, self.P, self.K = self._update(self.x_hat, self.P, z)
+    #     self.x_hat, self.P, self.K = self._update(z)
 
     def compute_probability_bound(self, alpha, delta):
         """

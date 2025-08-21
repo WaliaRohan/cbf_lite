@@ -77,30 +77,26 @@ def vanilla_clf_dubins_2D(state, goal):
 def vanilla_clf_x(state, goal):
     return ((state[0] - goal[0])**2).squeeze()
 
-# @jit
+@jax.jit
 def vanilla_clf_dubins(state, goal):
-    y = state[1]
-    v = state[2]
-    theta = state[3]
+    state = jnp.asarray(state).reshape(-1)  # ensure 1-D
+    goal  = jnp.asarray(goal).reshape(-1)
 
-    x_dot = v*jnp.cos(theta)
-    y_dot = v*jnp.sin(theta)
+    y, v, theta = state[1], state[2], state[3]
+
+    x_dot = v * jnp.cos(theta)
+    y_dot = v * jnp.sin(theta)
 
     y_d = goal[1]
+    e_y = (y_d - y) - y_dot
 
-    yd_dot = y_d - y
-    e_y = yd_dot - y_dot
-
-    lyap = 0.5*e_y**2
-
+    lyap = 0.5 * e_y**2
     Kv = 0.5
-    
-    num = Kv*lyap + (y*y_dot)**2 + y_dot**2
-    den = 1e-6 + (y*x_dot)**2
 
-    V = num/den
+    num = Kv * lyap + (y * y_dot)**2 + y_dot**2
+    den = 1e-6 + (y * x_dot)**2
 
-    return V
+    return num / den
 
 def clf_1D_doubleint(state, goal):
     """
@@ -341,46 +337,6 @@ class BeliefCBF:
         rhs = coeff@jnp.array([L_f_h, h]) + L_f_2_h
 
         return rhs, cbf_gain*coeff[0]*L_f_h, cbf_gain*coeff[1]*h
-
-# def get_diff(function, x, sigma):
-
-#     subkey = SUBKEY # globally defined
-
-#     n_samples = 10
-#     state_dim = len(x)
-
-#     samples = random.normal(subkey, (n_samples, state_dim))
-#     jacobian = jacfwd(function)
-
-#     total = 0
-#     for sample in samples:
-#         _, dyn_g = system_dynamics(sample[:-1])
-#         grad = jacobian(sample)[:-1]
-#         total += jnp.sum(jnp.abs(jnp.matmul(grad, dyn_g)))
-
-#     def exponential_new_func(x: Array):
-#         return jnp.matmul(jacobian(x)[:-1], system_dynamics(x[:-1])[0])
-
-
-# def h_b_rb2(alpha, beta, mu, sigma, delta):
-#     '''
-#     Function for calculating barrier function for h_b where relative degree is 2
-#     '''
-
-#     roots = jnp.array([-0.1]) # Manually select root to be in left half plane
-#     polynomial = np.poly1d(roots, r=True)
-#     coeff = jnp.array(polynomial.coeffs)
-
-#     h_0 = belief_cbf_half_space(alpha, beta, mu, sigma, delta)
-#     h_1 = jnp.grad(h_0, argnums=2) # 1st order derivative, take derivative with respect to mean of belief
-
-#     h_2 = jnp.array(h_0*coeff[0]) + jnp.array(h_1*coeff[1]) # equation 4 (belief paper), equation 38 (ECBF paper)
-
-#     return h_2
-
-
-
-
 
     
 
