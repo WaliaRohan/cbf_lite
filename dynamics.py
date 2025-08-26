@@ -12,7 +12,7 @@ class SingleIntegrator1D:
         self.f_matrix = jnp.array([a])  # Linear drift term
         self.g_matrix = jnp.array([[b]])  # Control directly influences state
         if Q is None:
-            self.Q = jnp.eye(1) * 0  # Default to zero process noise
+            self.Q = jnp.eye(self.state_dim) * 0  # Default to zero process noise
         else:
             self.Q = Q
 
@@ -59,7 +59,7 @@ class SimpleDynamics:
         self.f_matrix = jnp.array([[0.01, 0.02], [0.03, 0.04]])  # No drift for now
         self.g_matrix = jnp.array([[1, 0], [0, 1]])  # Identity control matrix
         if Q is None:
-            self.Q = jnp.eye(self.f_matrix.shape[1])*0 
+            self.Q = jnp.eye(self.state_dim)*0 
         else:
             self.Q = Q
 
@@ -90,7 +90,7 @@ class LinearDoubleIntegrator1D:
 
         # Default process noise
         if Q is None:
-            self.Q = jnp.eye(2) * 0
+            self.Q = jnp.eye(self.state_dim) * 0
         else:
             self.Q = Q
 
@@ -122,7 +122,7 @@ class NonlinearSingleIntegrator:
     def __init__(self, Q=None):
         self.state_dim = 2
         if Q is None:
-            self.Q = jnp.eye(2) * 0
+            self.Q = jnp.eye(self.state_dim) * 0
         else:
             self.Q = Q
     
@@ -151,7 +151,7 @@ class DubinsDynamics:
         self.state_dim = 4
         """Initialize Dubins Car dynamics."""
         if Q is None:
-            self.Q = jnp.eye(4)*0 
+            self.Q = jnp.eye(self.state_dim)*0 
         else:
             self.Q = Q
 
@@ -190,6 +190,104 @@ class DubinsDynamics:
 
         # Reshape u to ensure it has atleast 1 column
         return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
+
+    
+class UnicyleDynamics:
+    """2D Dubins Car Model with constant velocity and control over heading rate."""
+
+    def __init__(self, Q=None):
+        self.name = "Unicycle Dynamics"
+        self.state_dim = 3
+        if Q is None:
+            self.Q = jnp.eye(self.state_dim)*0 
+        else:
+            self.Q = Q
+
+    def f(self, x):
+        """
+        Compute the drift dynamics f(x).
+        
+        State x = [x_pos, y_pos, v, theta]
+        """
+        
+        return jnp.array([
+            [0],  # No control influence on x
+            [0],  # No control influence on y
+            [0]   # No control influence on theta
+        ])
+
+    def g(self, x):
+        """
+        Compute the control matrix g(x).
+        
+        Control u = [heading rate omega]
+        """
+
+        theta = x[2]
+        
+        return jnp.array([
+                [jnp.cos(theta), 0.0],
+                [jnp.sin(theta), 0.0],
+                [0.0,            1.0]
+                ])
+
+    @partial(jax.jit, static_argnums=0)
+    def x_dot(self, x, u):
+        """Total dynamics: dx/dt = f(x) + g(x)u"""
+
+        # Reshape u to ensure it has atleast 1 column
+        return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
+
+
+class DubinsMultCtrlDynamics:
+    """Dubins / Bicycle model with velocity and steering control."""
+
+    def __init__(self, l=1.0, lin_v = 1.0, Q=None):
+        self.name = "Dubins Mult Ctrl Dynamics"
+        self.state_dim = 3   # [x, y, theta]
+        self.control_dim = 2 # [v, phi]
+        self.l = l
+        self.lin_v = lin_v
+        if Q is None:
+            self.Q = jnp.eye(self.state_dim) * 0
+        else:
+            self.Q = Q
+
+    def f(self, x):
+        """
+        Drift dynamics f(x).
+        No autonomous drift since control inputs fully drive motion.
+        """
+        return jnp.zeros((self.state_dim,))
+
+    def g(self, x):
+        """
+        Control influence matrix g(x).
+        State:   x = [x_pos, y_pos, theta]
+        Control: u = [v, phi] = [linear velocity, steering angle]
+        """
+        theta = x[2]
+
+        return jnp.array([
+            [jnp.cos(theta),      0.0],
+            [jnp.sin(theta),      0.0],
+            [0.0,            self.lin_v/self.l]
+        ])
+
+    @partial(jax.jit, static_argnums=0)
+    def x_dot(self, x, u):
+        """
+        Full dynamics: dx/dt = f(x) + g(x)u
+        u = [v, phi]
+        """
+        v, phi = u
+        theta = x[2]
+
+        dx = v * jnp.cos(theta)
+        dy = v * jnp.sin(theta)
+        dtheta = (v / self.l) * jnp.tan(phi)
+
+        return jnp.array([dx, dy, dtheta])
 
 
 
