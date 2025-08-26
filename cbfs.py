@@ -45,13 +45,10 @@ def sinusoidal_trajectory(t, A=1.0, omega=1.0, v=1.0, phase=0.0):
     theta = jnp.arctan2(y_dot, x_dot)
     return jnp.stack([x, y, theta], axis=0)
 
-
-
-# 1. Trajectory as shown in the picture (sinusoidal-like path)
 @jax.jit
-def s_trajectory(T, A=5.0, omega=0.5, v=1.0):
+def s_trajectory(T, A=1.0, omega=0.5, v=1.0):
     """
-    Generates an S-shaped sinusoidal trajectory.
+    Generates an S-shaped sinusoidal trajectory starting from (0,0).
 
     Args:
         T (jnp.ndarray): time indices, shape (N,)
@@ -60,17 +57,25 @@ def s_trajectory(T, A=5.0, omega=0.5, v=1.0):
         v (float): forward velocity scale
 
     Returns:
-        x, y, theta: each shape (N,)
+        traj: jnp.ndarray of shape (3, N) containing x, y, theta
     """
-    x = -v * T
+    # nominal path
+    x = v * T
     y = A * jnp.sin(omega * T) + A
-    dx = jnp.gradient(x, T)
-    dy = jnp.gradient(y, T)
+
+    # shift to start at (0,0)
+    x = x - x[0]
+    y = y - y[0]
+
+    # first derivatives
+    dx = v * jnp.ones_like(T)                 # <-- FIX: positive
+    dy = A * omega * jnp.cos(omega * T)
+
+    # heading
     theta = jnp.arctan2(dy, dx)
     return jnp.stack([x, y, theta], axis=0)
 
 
-# 2. Constant y trajectory
 @jax.jit
 def straight_trajectory(T, y_val=0.0, lin_v=1.0):
     """
@@ -120,7 +125,7 @@ def gain_schedule_ctrl(v_r, x, x_d, ell=0.05, lambda1=1.0, a1=1.0, a2=1.0):
     # ktheta = (a1 * ell) / (vr + eps)   # assumes vr>0 in normal use
 
     # Tim Wheeler's formulation
-    ky = (a1 * ell)/v_r
+    ky = (a1 * ell)/jnp.square(v_r)
     ktheta = (a2 * ell)/vr
 
 
@@ -135,7 +140,7 @@ def gain_schedule_ctrl(v_r, x, x_d, ell=0.05, lambda1=1.0, a1=1.0, a2=1.0):
 
     rot = jnp.array([
                     [jnp.cos(theta_d),  jnp.sin(theta_d), 0.0],
-                    [-jnp.sin(theta_d), jnp.sin(theta_d), 0.0],
+                    [-jnp.sin(theta_d), jnp.cos(theta_d), 0.0],
                     [              0.0,              0.0, 1.0]
                     ])
 

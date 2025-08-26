@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 10000# 5000
+T = 50000# 5000
 dynamics = DubinsMultCtrlDynamics()
 
 # Sensor Params
@@ -30,8 +30,7 @@ sensor_update_frequency = 0.1 # Hz
 wall_y = 10.0
 
 # Initial state
-lin_vel = 1.0
-x_init = [0.0, 0.0, 0.1] # x, y, v, theta
+x_init = [0.0, 0.0, 0.8] # x, y, v, theta
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
@@ -61,8 +60,9 @@ delta2 = 0.001  # Probability of failure threshold
 cbf2 = BeliefCBF(alpha2, beta2, delta2, n)
 
 # Control params
+lin_vel = 5.0
 MAX_LINEAR=lin_vel
-MAX_ANGULAR = 0.25
+MAX_ANGULAR = 0.5
 U_MAX = np.array([MAX_LINEAR, MAX_ANGULAR])
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 50.0
@@ -84,8 +84,9 @@ def solve_qp(b, goal_loc):
 
     u_nom = gain_schedule_ctrl(v_r=lin_vel,
                                x = x_estimated,
+                               ell=0.163,
                                x_d = goal_loc,
-                               lambda1=1.0, a1=10.0, a2=15.0)
+                               lambda1=1.0, a1=16.0, a2=100.0)
 
     # # Compute CBF components
     # h = cbf.h_b(b)
@@ -163,8 +164,8 @@ goal_loc = x_init
 
 t_vec = jnp.arange(0.0, T + 1.0, 1.0)*dt
 # goal_x_nom = sinusoidal_trajectory(t_vec, A=goal[1], omega=1.0, v=lin_vel).T  # shape (T/dt, 2)
-goal_x_nom = straight_trajectory(t_vec, y_val=0.5, lin_v=lin_vel).T
-# goal_x_nom = s_trajectory(t_vec, A=5.0, omega=0.5, v=lin_vel).T
+# goal_x_nom = straight_trajectory(t_vec, y_val=0.5, lin_v=lin_vel).T
+goal_x_nom = s_trajectory(t_vec, A=5.0, omega=0.25, v=lin_vel).T
 
 # plt.figure(figsize=(10, 10))
 # plt.plot(goal_x_nom[:, 0], goal_x_nom[:, 1], "Green", label="Nominal Trajectory")
@@ -285,7 +286,7 @@ plt.title(f"Control Values ({estimator.name})")
 plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
-# plt.show()
+plt.show()
 
 
 # # Plot CLF (Debug)
@@ -338,22 +339,22 @@ plt.legend(fontsize=14)
 # plt.legend(fontsize=14)
 # plt.show()
 
-kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-covariance_traces = [jnp.trace(P) for P in covariances]
-inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
+# kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+# covariance_traces = [jnp.trace(P) for P in covariances]
+# inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 
-# # Plot trace of Kalman gains and covariances
-plt.figure(figsize=(10, 10))
-plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-# plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
-# plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
-plt.xlabel("Time Step (s)")
-plt.ylabel("Trace Value")
-plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-plt.legend()
-plt.grid()
-plt.show()
+# # # Plot trace of Kalman gains and covariances
+# plt.figure(figsize=(10, 10))
+# plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+# plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+# # plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
+# # plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
+# plt.xlabel("Time Step (s)")
+# plt.ylabel("Trace Value")
+# plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+# plt.legend()
+# plt.grid()
+# plt.show()
 
 ## Probability of leaving safe set
 
