@@ -5,9 +5,8 @@ from jax.scipy.special import erf, erfinv
 class EKF:
     """Discrete EKF"""
     
-    def __init__(self, dynamics, dt, h = None, x_init=None, P_init=None, Q=None, R=None):
+    def __init__(self, dynamics, h = None, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
-        self.dt = dt  # Time step
         self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # Ideally, it's shape should be (dynamics.state_dim, obs_dim)
         self.name = "EKF"
 
@@ -28,14 +27,14 @@ class EKF:
         else:
             self.h = h
 
-    def predict(self, u):
+    def predict(self, u, dt):
         """
         Predict step of EKF.
         
         See (Page 274, Table 5.1, Optimal and Robust Estimation)
         """
         # Nonlinear state propagation
-        self.x_hat = self.x_hat + self.dt * self.dynamics.x_dot(self.x_hat, u)
+        self.x_hat = self.x_hat + dt * self.dynamics.x_dot(self.x_hat, u)
 
         # Compute Jacobian of dynamics (linearization)
         F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
@@ -44,7 +43,7 @@ class EKF:
         if len(F.shape) > 2: 
             F = F.squeeze()
         P_dot = F @ self.P + self.P @ F.T + self.Q
-        self.P = self.P + P_dot*self.dt
+        self.P = self.P + P_dot*dt
 
     def update(self, z):
         """
@@ -117,9 +116,8 @@ class EKF:
 class GEKF:
     """Continuous-Discrete GEKF"""
     
-    def __init__(self, dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h = None, x_init=None, P_init=None, Q=None, R=None):
+    def __init__(self, dynamics, mu_u, sigma_u, mu_v, sigma_v, h = None, x_init=None, P_init=None, Q=None, R=None):
         self.dynamics = dynamics  # System dynamics model
-        self.dt = dt  # Time step
         self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
         self.name = "GEKF"
 
@@ -146,14 +144,14 @@ class GEKF:
         else:
             self.h = h
 
-    def predict(self, u):
+    def predict(self, u, dt):
         """
         Same as predict step of EKF.
         
         See (Page 274, Table 5.1, Optimal and Robust Estimation)        
         """
         # Nonlinear state propagation
-        self.x_hat = self.x_hat + self.dt * self.dynamics.x_dot(self.x_hat, u)
+        self.x_hat = self.x_hat + dt * self.dynamics.x_dot(self.x_hat, u)
 
         # Compute Jacobian of dynamics (linearization)
         F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
@@ -163,7 +161,7 @@ class GEKF:
             F = F.squeeze()
         P_dot = F @ self.P + self.P @ F.T + self.Q
 
-        self.P = self.P + P_dot*self.dt
+        self.P = self.P + P_dot*dt
 
     def update(self, z):
         """
