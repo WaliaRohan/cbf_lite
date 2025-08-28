@@ -16,8 +16,8 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 50000# 5000
-dynamics = DubinsMultCtrlDynamics()
+T = 30000# 5000
+dynamics =  DubinsMultCtrlDynamics() # UnicyleDynamics()
 
 # Sensor Params
 mu_u = 0.1
@@ -27,10 +27,12 @@ sigma_v = jnp.sqrt(0.0005) # Standard deviation
 sensor_update_frequency = 0.1 # Hz
 
 # Obstacle
-wall_y = 10.0
+wall_y = 5.0
 
 # Initial state
-x_init = [0.0, 0.0, 0.8] # x, y, v, theta
+# x_init = [0.0, 0.0, 0.8] # x, y, v, theta
+lin_vel = 5.0
+x_init = [0.0, 0.0, lin_vel, 0.8]
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
@@ -48,25 +50,26 @@ estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initi
 
 # Define belief CBF parameters
 n = dynamics.state_dim
-alpha = jnp.array([0.0, -1.0, 0.0])
+# alpha = jnp.array([0.0, -1.0, 0.0])
+alpha = jnp.array([0.0, -1.0, 0.0, 0.0])
 beta = jnp.array([-wall_y])
 delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # CBF 2
+# alpha2 = jnp.array([0.0, 1.0, 0.0])
 alpha2 = jnp.array([0.0, 1.0, 0.0, 0.0])
 beta2 = jnp.array([-wall_y])
 delta2 = 0.001  # Probability of failure threshold
 cbf2 = BeliefCBF(alpha2, beta2, delta2, n)
 
 # Control params
-lin_vel = 5.0
 MAX_LINEAR=lin_vel
 MAX_ANGULAR = 0.5
 U_MAX = np.array([MAX_LINEAR, MAX_ANGULAR])
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 50.0
-cbf_gain = 10.0  # CBF linear gain
+cbf_gain = 50.0  # CBF linear gain
 CBF_ON = True
 
 # OSQP solver instance
@@ -77,69 +80,71 @@ print(jax.default_backend())
 m = len(U_MAX) # control dim
 var_dim = m + 1 # ctrl dim + slack variable
 
-@jit
+# @jit
 def solve_qp(b, goal_loc):
 
     x_estimated, sigma = cbf.extract_mu_sigma(b)
 
+    x_current = jnp.concatenate([x_estimated[:2], x_estimated[3:]]) # Deleting velocity fro mstate vector to match with goal_loc
     u_nom = gain_schedule_ctrl(v_r=lin_vel,
-                               x = x_estimated,
+                               x = x_current ,
                                ell=0.163,
                                x_d = goal_loc,
                                lambda1=1.0, a1=16.0, a2=100.0)
 
-    # # Compute CBF components
-    # h = cbf.h_b(b)
-    # L_f_hb, L_g_hb, L_f_2_h, Lg_Lf_h, grad_h_b, f_b = cbf.h_dot_b(b, dynamics) # ∇h(x)
+    # Compute CBF components
+    h = cbf.h_b(b)
+    L_f_hb, L_g_hb, L_f_2_h, Lg_Lf_h, grad_h_b, f_b = cbf.h_dot_b(b, dynamics) # ∇h(x)
 
-    # L_f_h = L_f_hb
+    L_f_h = L_f_hb
 
-    # rhs, L_f_h, h_gain = cbf.h_b_r2_RHS(h, L_f_h, L_f_2_h, cbf_gain)
+    rhs, L_f_h, h_gain = cbf.h_b_r2_RHS(h, L_f_h, L_f_2_h, cbf_gain)
 
-    # # Compute CBF2 components
-    # h_2 = cbf2.h_b(b)
-    # L_f_hb_2, L_g_hb_2, L_f_2_h_2, Lg_Lf_h_2, _, _ = cbf2.h_dot_b(b, dynamics) # ∇h(x)
+    # Compute CBF2 components
+    h_2 = cbf2.h_b(b)
+    L_f_hb_2, L_g_hb_2, L_f_2_h_2, Lg_Lf_h_2, _, _ = cbf2.h_dot_b(b, dynamics) # ∇h(x)
 
-    # L_f_h_2 = L_f_hb_2
+    L_f_h_2 = L_f_hb_2
 
-    # rhs2, L_f_h2, _ = cbf2.h_b_r2_RHS(h_2, L_f_h_2, L_f_2_h_2, cbf_gain)
+    rhs2, L_f_h2, _ = cbf2.h_b_r2_RHS(h_2, L_f_h_2, L_f_2_h_2, cbf_gain)
 
-    # A = jnp.vstack([
-    #     jnp.concatenate([-Lg_Lf_h, jnp.array([0.0, 0.0])]), # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
-    #     jnp.concatenate([-Lg_Lf_h_2, jnp.array([0.0, 0.0])]), # 2nd CBF
-    #     jnp.eye(var_dim)
-    # ])
+    A = jnp.vstack([
+        jnp.concatenate([-Lg_Lf_h, jnp.array([0.0])]), # -LgLfh u       <= -[alpha1 alpha2].T @ [Lfh h] + Lf^2h
+        jnp.concatenate([-Lg_Lf_h_2, jnp.array([0.0])]), # 2nd CBF
+        jnp.eye(var_dim)
+    ])
 
-    # u = jnp.hstack([
-    #     (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
-    #     (rhs2).squeeze(),                           # 2nd CBF constraint
-    #     U_MAX, 
-    #     jnp.inf # no upper limit on slack
-    # ])
+    u = jnp.hstack([
+        (rhs).squeeze(),                            # CBF constraint: rhs = -[alpha1 alpha2].T [Lfh h] + Lf^2h
+        (rhs2).squeeze(),                           # 2nd CBF constraint
+        U_MAX, 
+        jnp.inf # no upper limit on slack
+    ])
 
-    # l = jnp.hstack([
-    #     -jnp.inf, # No lower limit on CBF condition
-    #     -jnp.inf, # 2nd CBF
-    #     -U_MAX,
-    #     0.0 # slack can't be negative
-    # ])
+    l = jnp.hstack([
+        -jnp.inf, # No lower limit on CBF condition
+        -jnp.inf, # 2nd CBF
+        -U_MAX,
+        0.0 # slack can't be negative
+    ])
 
-    # if not CBF_ON:
-    #     A = jnp.concatenate([A[:0], A[2:]], axis=0) # Remove CBF conditions
-    #     u = jnp.concatenate([u[:0], u[2:]], axis=0)        # Remove corresponding element in u
-    #     l = jnp.concatenate([l[:0], l[2:]], axis=0)         # Remove corresponding element in l
+    if CBF_ON:
+        A, u, l = A, u, l
+    else:
+        A, u, l = A[2:], u[2:], l[2:]
 
-    # # Define Q matrix: Minimize ||u||^2 and slack (penalty*delta^2)
-    # Q = jnp.eye(var_dim)
-    # Q = Q.at[-1, -1].set(2*clf_slack_penalty)
 
-    # c = jnp.append(-2.0*u_nom.flatten(), 0.0)
+    # Define Q matrix: Minimize ||u||^2 and slack (penalty*delta^2)
+    Q = jnp.eye(var_dim)
+    Q = Q.at[-1, -1].set(2*clf_slack_penalty)
 
-    # # Solve the QP using jaxopt OSQP
-    # sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
-    # return sol, V
+    c = jnp.append(-2.0*u_nom.flatten(), 0.0)
 
-    return u_nom
+    # Solve the QP using jaxopt OSQP
+    sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
+    return sol, h, h_2
+
+    # return u_nom
 
 x_traj = []  # Store trajectory
 x_meas = [] # Measurements
@@ -184,16 +189,16 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     # target_goal_loc = sinusoidal_trajectory(t*dt, A=goal[1], omega=1.0, v=lin_vel)
 
-    sol = solve_qp_cpu(belief, goal_loc)
-    # sol, V = solve_qp(belief, goal_loc)
+    sol, h, h_2 = solve_qp_cpu(belief, goal_loc)
+    # sol, h, h_2 = solve_qp(belief, goal_loc)
 
     # clf_values.append(V)
-    # cbf_values.append(h)
+    cbf_values.append([h, h_2])
 
-    # u_sol = jnp.array([sol.primal[0][0]])
+    u_sol = jnp.array([sol.primal[0][:2]]).reshape(-1, 1)
 
-    u_sol = sol
-    u_opt = jnp.clip(u_sol, -U_MAX, U_MAX)
+    # u_sol = sol
+    u_opt = jnp.clip(u_sol, -U_MAX.reshape(-1,1), U_MAX.reshape(-1,1))
     # u_opt = u_sol
 
     # Apply control to the true state (x_true)
@@ -251,9 +256,10 @@ x_traj = np.array(x_traj).squeeze()
 x_meas = np.array(x_meas).squeeze()
 x_est = np.array(x_est).squeeze()
 u_traj = np.array(u_traj)
+cbf_values = jnp.array(cbf_values) 
 
 x_nom = np.array(x_nom).squeeze()
-np.savetxt("x_nom.csv", x_nom, delimiter=",")
+# np.savetxt("x_nom.csv", x_nom, delimiter=",")
 
 time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
@@ -263,20 +269,23 @@ plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measur
 plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
 plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
 plt.plot(x_nom[:, 0], x_nom[:, 1], "Green", label="Nominal Trajectory")
-# plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
-# plt.axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
+plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
+plt.axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
 # plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
 # plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
 plt.xlabel("x", fontsize=14)
 plt.ylabel("y", fontsize=14)
-plt.title("2D X-Trajectory (CLF-CBF QP-Controlled)", fontsize=14)
+plt.title(f"2D Trajectory ({estimator.name})", fontsize=14)
 plt.legend()
 plt.grid()
 # plt.show()
 
 # Plot controls
+h_vals   = cbf_values[:, 0]
+h2_vals  = cbf_values[:, 1]
 plt.figure(figsize=(10, 10))
-# plt.plot(time, np.array(cbf_values), color='red', label="CBF")
+plt.plot(time, h_vals, color='red', label=f"y < {wall_y}")
+plt.plot(time, h2_vals, color='purple', label=f"y > -{wall_y}")
 # plt.plot(time, np.array(clf_values), color='green', label="CLF")
 for i in range(m):
     plt.plot(time, u_traj[:, i], label=f"u_{i}")
@@ -286,7 +295,7 @@ plt.title(f"Control Values ({estimator.name})")
 plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
-plt.show()
+# plt.show()
 
 
 # # Plot CLF (Debug)
@@ -339,22 +348,22 @@ plt.show()
 # plt.legend(fontsize=14)
 # plt.show()
 
-# kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-# covariance_traces = [jnp.trace(P) for P in covariances]
-# inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
+kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
+covariance_traces = [jnp.trace(P) for P in covariances]
+inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 
-# # # Plot trace of Kalman gains and covariances
-# plt.figure(figsize=(10, 10))
-# plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-# plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-# # plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
-# # plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
-# plt.xlabel("Time Step (s)")
-# plt.ylabel("Trace Value")
-# plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
-# plt.legend()
-# plt.grid()
-# plt.show()
+# Plot trace of Kalman gains and covariances
+plt.figure(figsize=(10, 10))
+plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
+plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
+# plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
+# plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
+plt.xlabel("Time Step (s)")
+plt.ylabel("Trace Value")
+plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+plt.legend()
+plt.grid()
+plt.show()
 
 ## Probability of leaving safe set
 
@@ -400,14 +409,14 @@ print(f"CBF Linear Gain (cbf_gain): {cbf_gain}")
 
 print("\n--- Results ---")
 
-print("Number of estimate exceedances: ", np.sum(x_est > wall_y))
-print("Number of true exceedences", np.sum(x_traj > wall_y))
-print("Max estimate value: ", np.max(x_est))
-print("Max true value: ", np.max(x_traj))
-print("Mean true distance from obstacle: ", np.mean(wall_y - x_est))
-print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
-print("Cummulative distance to goal: ", np.sum(np.abs(x_traj - wall_y)))
-print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2)))
+# print("Number of estimate exceedances: ", np.sum(x_est > wall_y))
+# print("Number of true exceedences", np.sum(x_traj > wall_y))
+# print("Max estimate value: ", np.max(x_est))
+# print("Max true value: ", np.max(x_traj))
+# print("Mean true distance from obstacle: ", np.mean(wall_y - x_est))
+# print("Average controller effort: ", np.linalg.norm(u_traj, ord=2))
+# print("Cummulative distance to goal: ", np.sum(np.abs(x_traj - wall_y)))
+# print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2)))
 
 
 # Plot distance from safety boudary of estimates, max estimate value, 

@@ -190,7 +190,6 @@ class DubinsDynamics:
 
         # Reshape u to ensure it has atleast 1 column
         return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
-
     
 class UnicyleDynamics:
     """2D Dubins Car Model with constant velocity and control over heading rate."""
@@ -240,55 +239,51 @@ class UnicyleDynamics:
 
 
 class DubinsMultCtrlDynamics:
-    """Dubins / Bicycle model with velocity and steering control."""
+    """2D Dubins Car Model with constant velocity and control over heading rate."""
 
-    def __init__(self, l=1.0, lin_v = 1.0, Q=None):
-        self.name = "Dubins Mult Ctrl Dynamics"
-        self.state_dim = 3   # [x, y, theta]
-        self.control_dim = 2 # [v, phi]
-        self.l = l
-        self.lin_v = lin_v
+    def __init__(self, Q=None):
+        self.name = "Dubins Dynamics"
+        self.state_dim = 4
+        """Initialize Dubins Car dynamics."""
         if Q is None:
-            self.Q = jnp.eye(self.state_dim) * 0
+            self.Q = jnp.eye(4)*0 
         else:
             self.Q = Q
 
     def f(self, x):
         """
-        Drift dynamics f(x).
-        No autonomous drift since control inputs fully drive motion.
+        Compute the drift dynamics f(x).
+        
+        State x = [x_pos, y_pos, v, theta]
         """
-        return jnp.zeros((self.state_dim,))
-
+        v = x[2]
+        theta = x[3]
+        
+        return jnp.array([
+            [v * jnp.cos(theta)],  # x_dot
+            [v * jnp.sin(theta)],  # y_dot
+            [jnp.zeros_like(v)],   # no drift in velocity
+            [jnp.zeros_like(theta)]    # theta_dot (no drift)
+        ])
+        
     def g(self, x):
         """
-        Control influence matrix g(x).
-        State:   x = [x_pos, y_pos, theta]
-        Control: u = [v, phi] = [linear velocity, steering angle]
+        Compute the control matrix g(x).
+        
+        Control u = [lin_vel, ang_vel]
         """
-        theta = x[2]
-
         return jnp.array([
-            [jnp.cos(theta),      0.0],
-            [jnp.sin(theta),      0.0],
-            [0.0,            self.lin_v/self.l]
+            [0, 0],  # No control influence on x
+            [0, 0],  # No control influence on y
+            [1, 0],  # v_dot
+            [0, 1]   # theta_dot
         ])
 
-    @partial(jax.jit, static_argnums=0)
     def x_dot(self, x, u):
-        """
-        Full dynamics: dx/dt = f(x) + g(x)u
-        u = [v, phi]
-        """
-        v, phi = u
-        theta = x[2]
+        """Total dynamics: dx/dt = f(x) + g(x)u"""
 
-        dx = v * jnp.cos(theta)
-        dy = v * jnp.sin(theta)
-        dtheta = (v / self.l) * jnp.tan(phi)
-
-        return jnp.array([dx, dy, dtheta])
-
+        # Reshape u to ensure it has atleast 1 column
+        return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
 
 
     
