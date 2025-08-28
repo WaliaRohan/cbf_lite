@@ -76,11 +76,11 @@ def vanilla_clf_dubins_2D(state, goal):
 def vanilla_clf_x(state, goal):
     return ((state[0] - goal[0])**2).squeeze()
 
-def vanilla_clf_dubins_y(state, goal):
+def vanilla_clf_dubins(state, goal):
     y = state[1]
     v = state[2]
     theta = state[3]
-    
+
     x_dot = v*jnp.cos(theta)
     y_dot = v*jnp.sin(theta)
 
