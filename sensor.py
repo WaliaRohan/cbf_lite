@@ -1,6 +1,6 @@
 import jax.numpy as jnp
-from jax import random
-
+from jax import random, jit, lax
+from functools import partial
 
 def identity_sensor(x_true):
     return x_true
@@ -129,3 +129,93 @@ def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
     new_x = (1 + u_vector)*new_x + v_vector
 
     return new_x
+
+# @partial(jit, static_argnums=(1,))
+# def get_chol_jit(cov, dim, eps: float = 1e-6):
+#     """
+#     JAX-jittable covariance 'Cholesky-like' factor.
+
+#     If `cov` is a scalar (variance), returns sqrt(max(cov,0)) * I (shape: [dim, dim]).
+#     If `cov` is a (dim, dim) covariance matrix, returns L such that L @ L.T ≈ cov (PSD),
+#     constructed via eigen decomposition (stable under jit; no runtime branches on values).
+
+#     Args:
+#         cov: scalar variance or (dim, dim) covariance matrix (JAX array or Python scalar)
+#         dim: dimension of the target matrix
+#         eps: small diagonal regularizer for numerical stability in the matrix case
+
+#     Returns:
+#         L: (dim, dim) lower-ish factor (not strictly lower-triangular in matrix mode,
+#            but satisfies L @ L.T ≈ cov and is safe for sampling).
+#     """
+#     cov = jnp.asarray(cov)
+
+#     # STATIC (shape-based) branch is OK under jit
+#     if cov.ndim == 0:
+#         # Scalar variance: closed-form "Cholesky"
+#         s = jnp.sqrt(jnp.maximum(cov, 0.0))
+#         return s * jnp.eye(dim, dtype=cov.dtype)
+
+#     # Matrix covariance: symmetric PSD square root via eigh
+#     # Symmetrize to avoid asymmetry from numerics
+#     C = 0.5 * (cov + cov.T)
+#     # Gentle regularization to keep eigenvalues non-negative
+#     C = C + eps * jnp.eye(dim, dtype=C.dtype)
+#     w, Q = jnp.linalg.eigh(C)
+#     w_clipped = jnp.clip(w, a_min=0.0)
+#     L = Q @ jnp.diag(jnp.sqrt(w_clipped))
+
+#     print("In get_chol_jit")
+
+#     # Optional: return a strictly lower-triangular matrix if desired
+#     # (not necessary for correctness of L @ L.T)
+#     # L = jnp.tril(L)
+
+#     return L
+
+# @jit
+# def noisy_sensor_mult(x, t, mu_u, sigma_u, mu_v, sigma_v, key=None):
+#     if key is None:
+#         key = random.PRNGKey(0)
+
+#     # create a new key for each time step, based on original key
+#     key = random.fold_in(key, t)
+
+#     # Calculate the dimension of the random vector
+#     dim = max(x.shape)
+
+#     # (take n_initial_meas measurements at t = 0)
+#     n_initial_meas = 10
+
+#     # Generate standard normal samples with static shapes
+#     key, subkey = random.split(key)
+#     key, subkey2 = random.split(key)
+#     normal_samples   = random.normal(subkey,  shape=(n_initial_meas, dim))
+#     normal_samples_2 = random.normal(subkey2, shape=(n_initial_meas, dim))
+
+#     # Select per spec: mean over n_initial_meas if t==0 else use single sample
+#     def _use_mean(samps):  # (n, d) -> (d,)
+#         return jnp.mean(samps, axis=0)
+#     def _use_first(samps): # (n, d) -> (d,)
+#         return samps[0]
+
+#     selected_samples   = lax.cond(jnp.equal(t, 0), _use_mean, _use_first, normal_samples)
+#     selected_samples_2 = lax.cond(jnp.equal(t, 0), _use_mean, _use_first, normal_samples_2)
+
+#     # Apply Cholesky decomposition to obtain lower triangular matrix L of covariance Σ
+#     L_u = get_chol_jit(sigma_u**2, dim)
+#     L_v = get_chol_jit(sigma_v**2, dim)
+
+#     u_vector = mu_u + jnp.dot(L_u, selected_samples)
+#     v_vector = mu_v + jnp.dot(L_v, selected_samples_2)
+
+#     # new_x stores sensor measurement
+#     new_x = x
+
+#     # Add multiplicative noise and biased gaussian noise
+#     new_x = (1 + u_vector) * new_x + v_vector
+
+#     return new_x
+
+
+

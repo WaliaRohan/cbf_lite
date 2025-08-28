@@ -1,9 +1,10 @@
 import jax
 import jax.numpy as jnp
-from jax import jacfwd, jacrev, random
-from jax.scipy.special import erfinv
+from jax import random
+from jax.scipy.stats import norm
+from functools import partial
 
-
+@jax.jit
 def sinusoidal_trajectory(t, A=1.0, omega=1.0, v=1.0, phase=0.0):
     """
     Generate a 2D sinusoidal trajectory.
@@ -25,18 +26,144 @@ def sinusoidal_trajectory(t, A=1.0, omega=1.0, v=1.0, phase=0.0):
     # y = A * jnp.sin(omega * t + phase)
     # return jnp.array([x, y])
     t = jnp.asarray(t)
-    x = v * t
     T = t[-1]
-    amp_ramp = jnp.sin(0.75 * jnp.pi * t / T)
-    y = (A * amp_ramp) * jnp.sin(omega * t + phase)
-    return jnp.array([x, y])
+    
+    # define scalar functions of time
+    def x_of_t(tt):
+        return v * tt
+
+    def y_of_t(tt):
+        amp_ramp = jnp.sin(0.5 * jnp.pi * tt / T)
+        return (A * amp_ramp) * jnp.sin(omega * tt + phase)
+
+    # vectorize values and time-derivatives
+    x = jax.vmap(x_of_t)(t)
+    y = jax.vmap(y_of_t)(t)
+    x_dot = jax.vmap(jax.grad(x_of_t))(t)
+    y_dot = jax.vmap(jax.grad(y_of_t))(t)
+
+    theta = jnp.arctan2(y_dot, x_dot)
+    return jnp.stack([x, y, theta], axis=0)
+
+@jax.jit
+def s_trajectory(T, A=1.0, omega=0.5, v=1.0):
+    """
+    Generates an S-shaped sinusoidal trajectory starting from (0,0).
+
+    Args:
+        T (jnp.ndarray): time indices, shape (N,)
+        A (float): amplitude of sinusoid
+        omega (float): frequency parameter
+        v (float): forward velocity scale
+
+    Returns:
+        traj: jnp.ndarray of shape (3, N) containing x, y, theta
+    """
+    # nominal path
+    x = v * T
+    y = A * jnp.sin(omega * T) + A
+
+    # shift to start at (0,0)
+    x = x - x[0]
+    y = y - y[0]
+
+    # first derivatives
+    dx = v * jnp.ones_like(T)                 # <-- FIX: positive
+    dy = A * omega * jnp.cos(omega * T)
+
+    # heading
+    theta = jnp.arctan2(dy, dx)
+    return jnp.stack([x, y, theta], axis=0)
+
+
+@jax.jit
+def straight_trajectory(T, y_val=0.0, lin_v=1.0):
+    """
+    Generates a straight trajectory along x-axis with constant y.
+
+    Args:
+        T (jnp.ndarray): time indices, shape (N,)
+        y_val (float): constant y value
+        lin_v (float): linear velocity in x direction
+
+    Returns:
+        x, y, theta: each shape (N,)
+    """
+    x = lin_v * T
+    y = jnp.ones_like(T) * y_val
+    theta = jnp.zeros_like(T)
+    return jnp.stack([x, y, theta], axis=0)
+
+@jax.jit
+def gain_schedule_ctrl(v_r, x, x_d, ell=0.05, lambda1=1.0, a1=1.0, a2=1.0):
+    """
+    Implements a gain scheduling based controller for trajectory tracking. It is
+    by linearizing dubin's dynamics about v = v_r, and theta = 0. This represents
+    the desired trajectory (x_d), which is essentially a straight path.
+
+    Source: R. Murray, Optimization-Based Control: Trajectory Generation and 
+            Tracking, v2.3h, Section 2.2
+
+    Args:
+        v_r (float): Desired longitudinal velocity magnitude.
+        x (array): State vector
+        x_d (array): Desired state vector (defined in source as [v_r*t, y_r, and theta])
+        ell (float, optional): wheelbase. Defaults to 0.33.
+        lambda1 (float, optional): closed loop eigen value of longitudinal dynamics (e_x). Defaults to 1.0.
+        a1 (float, optional): coeff 1 of polynomial equation for theta. Defaults to 2.0.
+        a2 (float, optional): coeff 2 of polynomial equation for theta. Defaults to 4.0.
+
+    Returns:
+        _type_: _description_
+    """
+    # Safe denominators for jit (avoid divide-by-zero near stops)
+    e = x - x_d
+    eps = 0.0 # 1e-6
+    vr = v_r
+    kx = lambda1
+    # ky = (a2 * ell) / (vr * vr + eps)
+    # ktheta = (a1 * ell) / (vr + eps)   # assumes vr>0 in normal use
+
+    # Tim Wheeler's formulation
+    ky = (a1 * ell)/jnp.square(v_r)
+    ktheta = (a2 * ell)/vr
+
+
+    K = jnp.array([[kx, 0.0, 0.0],
+                    [0, ky, ktheta]])
+
+    # w = u - u_d = [-kx*e_x, -(ky*e_y + ktheta*e_theta)]
+    # w1 = -kx * e[0]
+    # w2 = -(ky * e[1] + ktheta * e[2])
+
+    theta_d = x_d[-1]
+
+    rot = jnp.array([
+                    [jnp.cos(theta_d),  jnp.sin(theta_d), 0.0],
+                    [-jnp.sin(theta_d), jnp.cos(theta_d), 0.0],
+                    [              0.0,              0.0, 1.0]
+                    ])
+
+    x_ref = rot@x
+
+    # u = u_d + w with u_d = [v_r, 0]
+
+    u_d = jnp.array([vr, 0.0]) # Nominal steering angle. Currently zero?
+    u = u_d - K@e
+
+    # v = vr + w1
+    # delta = w2               
+    # return jnp.array([v, delta])
+
+    return u
+
 
 def update_trajectory_index(system_pos, traj, index, eta):
     """
     Advance trajectory index if system is within eta of current target point.
     
     Inputs:
-        system_pos (jnp.ndarray): shape (2,)
+        system_pos (jnp.ndarray): shape (3,)
         traj (jnp.ndarray): shape (N, 2)
         index (int): current index
         eta (float): threshold distance
@@ -76,29 +203,26 @@ def vanilla_clf_dubins_2D(state, goal):
 def vanilla_clf_x(state, goal):
     return ((state[0] - goal[0])**2).squeeze()
 
+# @jax.jit
 def vanilla_clf_dubins(state, goal):
-    y = state[1]
-    v = state[2]
-    theta = state[3]
+    state = jnp.asarray(state).reshape(-1)  # ensure 1-D
+    goal  = jnp.asarray(goal).reshape(-1)
 
-    x_dot = v*jnp.cos(theta)
-    y_dot = v*jnp.sin(theta)
+    y, v, theta = state[1], state[2], state[3]
+
+    x_dot = v * jnp.cos(theta)
+    y_dot = v * jnp.sin(theta)
 
     y_d = goal[1]
+    e_y = (y_d - y) - y_dot
 
-    yd_dot = y_d - y
-    e_y = yd_dot - y_dot
+    lyap = 0.5 * e_y**2
+    Kv = 0.5
 
-    lyap = 0.5*e_y**2
+    num = Kv * lyap + (y * y_dot)**2 + y_dot**2
+    den = 1e-6 + (y * x_dot)**2
 
-    Kv = 5.0
-    
-    num = Kv*lyap + (y*y_dot)**2 + y_dot**2
-    den = (y*x_dot)**2
-
-    V = num
-
-    return V
+    return num / den
 
 def clf_1D_doubleint(state, goal):
     """
@@ -179,7 +303,7 @@ class BeliefCBF:
 
         return mu, sigma
     
-    # @jit
+    @partial(jax.jit, static_argnums=0)   # treat `self` as static
     def get_b_vector(self, mu, sigma):
 
         # Extract the upper triangular elements of a matrix as a 1D array
@@ -189,15 +313,37 @@ class BeliefCBF:
         b = jnp.concatenate([mu.flatten(), vec_sigma]) # mu.squeeze() would not work for shapes of size (1, 1) (it deletes all 1 dimensions). mu.flatten() makes final shape (n, ), regardless of original shape. 
 
         return b
-    
+
     def h_b(self, b):
-        """Computes h_b(b) given belief state b = [mu, vec_u(Sigma)]"""
+        '''
+        Computes CVaR belief CBF for a Multivariate Guassian Random Variable Y
+
+        Reference: Calculating CVaR and bPOE for Common Probability Distributions With Application to Portfolio 
+                   Optimization and Density Estimation  Matthew Norton · Valentyn Khokhlov · Stan Uryasev
+        '''
+
         mu, sigma = self.extract_mu_sigma(b)
 
-        term1 = jnp.dot(self.alpha.T, mu) - self.beta
-        term2 = jnp.sqrt(2 * jnp.dot(self.alpha.T, jnp.dot(sigma, self.alpha))) * erfinv(1 - 2 * self.delta)
+        mu_mod = jnp.dot(self.alpha.T, mu) - self.beta
+        sigma_mod = jnp.sqrt(self.alpha.T @ sigma @ self.alpha) # sigma_mod is sd, whereas sigma is cov
+
+        q_alpha = norm.ppf(self.delta) # delta quantile of standard normal distribution
+
+        f = norm.pdf(q_alpha)
+
+        CVaR = mu_mod - (sigma_mod*f)/self.delta # THIS IS FOR THE LOWER LEFT QUANTILE, DIFFERENT FROM bPOE SOURCE BUT CONSISTENT WITH BCBF
+
+        return CVaR.squeeze() # Convert from array to float
+
+    # def h_b(self, b):
+    #     """Computes h_b(b) given belief state b = [mu, vec_u(Sigma)]"""
+    #     mu, sigma = self.extract_mu_sigma(b)
+
+    #     term1 = jnp.dot(self.alpha.T, mu) - self.beta
+    #     term2 = jnp.sqrt(2 * jnp.dot(self.alpha.T, jnp.dot(sigma, self.alpha))) * erfinv(1 - 2 * self.delta)
         
-        return (term1 - term2).squeeze()  # Convert from array to float
+    #     return (term1 - term2).squeeze()  # Convert from array to float
+    # This entire function can be replaced by: term1 + jnp.sqrt(jnp.dot(self.alpha.T, jnp.dot(sigma, self.alpha))) * norm.ppf(self.delta))
     
     def h_dot_b(self, b, dynamics):
 
@@ -279,7 +425,6 @@ class BeliefCBF:
             return jnp.reshape(grad_h_b(b) @ f_b(b), ())
         
         def L_g_h(b):
-            # return jnp.reshape(grad_h_b(b) @ g_b(b), ())
             return grad_h_b(b) @ g_b(b)
         
         def L_f_2_h(b):
@@ -322,46 +467,6 @@ class BeliefCBF:
         rhs = coeff@jnp.array([L_f_h, h]) + L_f_2_h
 
         return rhs, cbf_gain*coeff[0]*L_f_h, cbf_gain*coeff[1]*h
-
-# def get_diff(function, x, sigma):
-
-#     subkey = SUBKEY # globally defined
-
-#     n_samples = 10
-#     state_dim = len(x)
-
-#     samples = random.normal(subkey, (n_samples, state_dim))
-#     jacobian = jacfwd(function)
-
-#     total = 0
-#     for sample in samples:
-#         _, dyn_g = system_dynamics(sample[:-1])
-#         grad = jacobian(sample)[:-1]
-#         total += jnp.sum(jnp.abs(jnp.matmul(grad, dyn_g)))
-
-#     def exponential_new_func(x: Array):
-#         return jnp.matmul(jacobian(x)[:-1], system_dynamics(x[:-1])[0])
-
-
-# def h_b_rb2(alpha, beta, mu, sigma, delta):
-#     '''
-#     Function for calculating barrier function for h_b where relative degree is 2
-#     '''
-
-#     roots = jnp.array([-0.1]) # Manually select root to be in left half plane
-#     polynomial = np.poly1d(roots, r=True)
-#     coeff = jnp.array(polynomial.coeffs)
-
-#     h_0 = belief_cbf_half_space(alpha, beta, mu, sigma, delta)
-#     h_1 = jnp.grad(h_0, argnums=2) # 1st order derivative, take derivative with respect to mean of belief
-
-#     h_2 = jnp.array(h_0*coeff[0]) + jnp.array(h_1*coeff[1]) # equation 4 (belief paper), equation 38 (ECBF paper)
-
-#     return h_2
-
-
-
-
 
     
 

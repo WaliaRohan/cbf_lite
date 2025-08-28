@@ -1,4 +1,6 @@
 import jax.numpy as jnp
+from functools import partial
+import jax
 
 class SingleIntegrator1D:
     """1D Single Integrator Dynamics with Drift: dx/dt = a * x + u"""
@@ -10,7 +12,7 @@ class SingleIntegrator1D:
         self.f_matrix = jnp.array([a])  # Linear drift term
         self.g_matrix = jnp.array([[b]])  # Control directly influences state
         if Q is None:
-            self.Q = jnp.eye(1) * 0  # Default to zero process noise
+            self.Q = jnp.eye(self.state_dim) * 0  # Default to zero process noise
         else:
             self.Q = Q
 
@@ -57,7 +59,7 @@ class SimpleDynamics:
         self.f_matrix = jnp.array([[0.01, 0.02], [0.03, 0.04]])  # No drift for now
         self.g_matrix = jnp.array([[1, 0], [0, 1]])  # Identity control matrix
         if Q is None:
-            self.Q = jnp.eye(self.f_matrix.shape[1])*0 
+            self.Q = jnp.eye(self.state_dim)*0 
         else:
             self.Q = Q
 
@@ -88,7 +90,7 @@ class LinearDoubleIntegrator1D:
 
         # Default process noise
         if Q is None:
-            self.Q = jnp.eye(2) * 0
+            self.Q = jnp.eye(self.state_dim) * 0
         else:
             self.Q = Q
 
@@ -120,7 +122,7 @@ class NonlinearSingleIntegrator:
     def __init__(self, Q=None):
         self.state_dim = 2
         if Q is None:
-            self.Q = jnp.eye(2) * 0
+            self.Q = jnp.eye(self.state_dim) * 0
         else:
             self.Q = Q
     
@@ -142,6 +144,101 @@ class NonlinearSingleIntegrator:
         return self.f(x) + self.g(x) @ u
 
 class DubinsDynamics:
+    """2D Dubins Car Model with constant velocity and control over heading rate."""
+
+    def __init__(self, Q=None):
+        self.name = "Dubins Dynamics"
+        self.state_dim = 4
+        """Initialize Dubins Car dynamics."""
+        if Q is None:
+            self.Q = jnp.eye(self.state_dim)*0 
+        else:
+            self.Q = Q
+
+    def f(self, x):
+        """
+        Compute the drift dynamics f(x).
+        
+        State x = [x_pos, y_pos, v, theta]
+        """
+        v = x[2]
+        theta = x[3]
+        
+        return jnp.array([
+            [v * jnp.cos(theta)],  # x_dot
+            [v * jnp.sin(theta)],  # y_dot
+            [jnp.zeros_like(v)],   # no drift in velocity
+            [jnp.zeros_like(theta)]    # theta_dot (no drift)
+        ])
+        
+    def g(self, x):
+        """
+        Compute the control matrix g(x).
+        
+        Control u = [lin_vel, ang_vel]
+        """
+        return jnp.array([
+            [0, 0],  # No control influence on x
+            [0, 0],  # No control influence on y
+            [1, 0],  # v_dot
+            [0, 1]   # theta_dot
+        ])
+
+    @partial(jax.jit, static_argnums=0)
+    def x_dot(self, x, u):
+        """Total dynamics: dx/dt = f(x) + g(x)u"""
+
+        # Reshape u to ensure it has atleast 1 column
+        return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
+    
+class UnicyleDynamics:
+    """2D Dubins Car Model with constant velocity and control over heading rate."""
+
+    def __init__(self, Q=None):
+        self.name = "Unicycle Dynamics"
+        self.state_dim = 3
+        if Q is None:
+            self.Q = jnp.eye(self.state_dim)*0 
+        else:
+            self.Q = Q
+
+    def f(self, x):
+        """
+        Compute the drift dynamics f(x).
+        
+        State x = [x_pos, y_pos, v, theta]
+        """
+        
+        return jnp.array([
+            [0],  # No control influence on x
+            [0],  # No control influence on y
+            [0]   # No control influence on theta
+        ])
+
+    def g(self, x):
+        """
+        Compute the control matrix g(x).
+        
+        Control u = [heading rate omega]
+        """
+
+        theta = x[2]
+        
+        return jnp.array([
+                [jnp.cos(theta), 0.0],
+                [jnp.sin(theta), 0.0],
+                [0.0,            1.0]
+                ])
+
+    @partial(jax.jit, static_argnums=0)
+    def x_dot(self, x, u):
+        """Total dynamics: dx/dt = f(x) + g(x)u"""
+
+        # Reshape u to ensure it has atleast 1 column
+        return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
+
+
+class DubinsMultCtrlDynamics:
     """2D Dubins Car Model with constant velocity and control over heading rate."""
 
     def __init__(self, Q=None):
@@ -187,4 +284,6 @@ class DubinsDynamics:
 
         # Reshape u to ensure it has atleast 1 column
         return (self.f(x) + self.g(x) @ (u.reshape(u.shape[0], -1))).reshape(x.shape)
+
+
     
