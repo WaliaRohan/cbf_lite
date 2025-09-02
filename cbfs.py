@@ -327,9 +327,9 @@ class BeliefCBF:
         mu_mod = jnp.dot(self.alpha.T, mu) - self.beta
         sigma_mod = jnp.sqrt(self.alpha.T @ sigma @ self.alpha) # sigma_mod is sd, whereas sigma is cov
 
-        q_alpha = norm.ppf(self.delta) # delta quantile of standard normal distribution
+        q_delta = norm.ppf(self.delta) # delta quantile of standard normal distribution
 
-        f = norm.pdf(q_alpha)
+        f = norm.pdf(q_delta)
 
         CVaR = mu_mod - (sigma_mod*f)/self.delta # THIS IS FOR THE LOWER LEFT QUANTILE, DIFFERENT FROM bPOE SOURCE BUT CONSISTENT WITH BCBF
 
