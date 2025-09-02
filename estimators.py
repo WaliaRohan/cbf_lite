@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 from jax.scipy.special import erf, erfinv
+from jax.scipy.stats import norm
 from functools import partial
 
 class EKF:
@@ -29,23 +30,26 @@ class EKF:
         else:
             self.h = h
 
+    @partial(jax.jit, static_argnums=0)   # treat `self` as static config
+    def _predict(self, x_hat, P, u):
+        f = self.dynamics.x_dot                   # pure function R^n×R^m→R^n (JAX ops only)
+        x_next = x_hat + self.dt * f(x_hat, u)    # state propagation
+
+        # Linearization wrt state (n×n)
+        F = jax.jacfwd(f, argnums=0)(x_hat, u)
+
+        # Covariance Euler step: Ṗ = F P + P Fᵀ + Q
+        P_next = P + self.dt * (F @ P + P @ F.T + self.Q)
+        return x_next, P_next
+
     def predict(self, u):
         """
-        Predict step of EKF.
+        Same as predict step of EKF.
         
-        See (Page 274, Table 5.1, Optimal and Robust Estimation)
+        See (Page 274, Table 5.1, Optimal and Robust Estimation)        
         """
-        # Nonlinear state propagation
-        self.x_hat = self.x_hat + self.dt * self.dynamics.x_dot(self.x_hat, u)
+        self.x_hat, self.P = self._predict(self.x_hat, self.P, u)
 
-        # Compute Jacobian of dynamics (linearization)
-        F = jax.jacobian(lambda x: (self.dynamics.x_dot(x, u).squeeze()))(self.x_hat)
-
-        # Covariance udpate 
-        if len(F.shape) > 2: 
-            F = F.squeeze()
-        P_dot = F @ self.P + self.P @ F.T + self.Q
-        self.P = self.P + P_dot*self.dt
 
     def update(self, z):
         """
@@ -138,13 +142,16 @@ class GEKF:
         self.R = R if R is not None else jnp.square(sigma_v)*jnp.eye(dynamics.state_dim) # Measurement noise covariance
          
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
-        self.sigma_minus = self.P # For computing probability bound
 
         # Initialize observation function as identity function
         if h is None:
             self.h = lambda x: x
         else:
             self.h = h
+
+        # Pobability bound variables
+        self.sigma_minus = self.P # Initialize covariance before measurement, for predicting probability bounds
+        self.theta_prime = 0.0 # Initialize innovation term, for predicting probability bounds
 
         # H_x Jacobian of measurement function wrt state vector
         self.H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
@@ -205,81 +212,78 @@ class GEKF:
         M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
         
         S_term_1 = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx)))  # Perform matrix multiplication
-        S = S_term_1 + jnp.square(sigma_u)*M + self.R[:obs_dim, :obs_dim]
+        S = S_term_1 + jnp.square(sigma_u)*M + self.R[:obs_dim, :obs_dim] 
 
         self.K = jnp.matmul(C, jnp.linalg.inv(S))
 
+
+        # Store info for plotting/analysis
+        self.in_cov = S
+        self.theta_prime = (self.K@y).reshape(self.x_hat.shape) # innovation term, double transpose because of how state is defined
+        self.lambda_prime = self.K @ S @ self.K.T # innovation term covariance
+        self.sigma_minus = self.P
+        self.mu_minus = self.x_hat
+
         # Update state estimate
-        self.x_hat = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # double transpose because of how state is defined.
+        self.x_hat = self.x_hat + self.theta_prime
 
         # Update covariance
         self.P = self.P - jnp.matmul(self.K, jnp.transpose(C))
 
-    # @partial(jax.jit, static_argnums=0)   # treat `self` as static
-    # def _update(self, z):
-    #     mu_u = self.mu_u
-    #     sigma_u = self.sigma_u
-    #     mu_v = self.mu_v
-
-    #     # H_x Jacobian of measurement function wrt state vector
-    #     H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
-    #     """
-    #     NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
-    #     state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
-    #     """
-
-    #     obs_dim = self.obs_dim
-
-    #     z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
-
-    #     h_z = self.h(self.x_hat)
-    #     E = (1 + mu_u)*h_z + mu_v # This is the "observation function output" for GEKF
-
-    #     y = (z_obs - E) # Innovation term: note self.x_hat comes from identity observation model
-    #     y = jnp.reshape(y, (obs_dim, 1)) 
-
-    #     dhdx = H_x
-
-    #     C = (1 + mu_u)*jnp.matmul(self.P, jnp.transpose(dhdx))  # Perform the matrix multiplication
-        
-    #     M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
-        
-    #     S_term_1 = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx)))  # Perform matrix multiplication
-    #     S = S_term_1 + jnp.square(sigma_u)*M + self.R[:obs_dim, :obs_dim]
-
-    #     K = jnp.matmul(C, jnp.linalg.inv(S))
-    #     # K = jnp.linalg.solve(S, C.T).T  
-
-    #     # Update state estimate
-    #     x_hat_next = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # double transpose because of how state is defined.
-
-    #     # Update covariance
-    #     P_next = self.P - jnp.matmul(self.K, jnp.transpose(C))
-
-    #     return x_hat_next, P_next, K
-
-    # def update(self, z):
-    #     self.x_hat, self.P, self.K = self._update(z)
-
-    def compute_probability_bound(self, alpha, delta):
+    def prob_staying_CVaR_GEKF(self, alpha, delta, beta):
         """
-        Returns the probability bounds for a range of delta values.
+        Returns probability of staying inside safe set (without buffer) for the
+        CVaR GEKF.
+
+        Args:
+            alpha (array): BCBF constraint state gain matrix
+            beta (Float): BCBF constraint offset
+            delta (float): desired risk level (probability of failure)
+            h (function): BCBF function
+
+        Returns:
+            _type_: _description_
         """
-        I = jnp.eye(self.K.shape[1])  # assuming K is (n x n)
 
-        Sigma = self.sigma_minus
-        K = self.K
-        Lambda = self.in_cov
-        H = jnp.eye(self.dynamics.state_dim) 
+        def get_mult_std(alpha, cov):
+            """
+            Return std for multivariate random variable
+
+            Args:
+                alpha (vector): Linear gain
+                cov (matrix): Covariance matrix
+
+            Returns:
+                float: std
+            """
+            return jnp.sqrt(alpha.T @ cov @ alpha)
+
+        # 1) Calculate ξ (xi) at b_minus (belief before measurement)
+        I = jnp.eye(self.dynamics.state_dim)
         
-        alphaT_Sigma_alpha = alpha.T @ Sigma @ alpha
-        term1 = jnp.sqrt(2 * alphaT_Sigma_alpha)
-        term2 = jnp.sqrt(2 * alpha.T @ (I - K @ H) @ Sigma @ alpha)
-        xi = erfinv(1 - 2 * delta) * (term1 - term2)
+        q_delta = norm.ppf(delta) # delta quantile of standard normal distribution
+        f = norm.pdf(q_delta)
+        
+        var = (I - (1 + self.mu_u)*self.K@self.H_x)@self.sigma_minus
 
-        denominator = jnp.sqrt(2 * alpha.T @ Lambda @ alpha)
-        return 0.5 * (1 - erf(xi / denominator))
+        xi_b_minus = f * (get_mult_std(alpha, self.sigma_minus) -  get_mult_std(alpha, var))/delta
 
+        # 2) Calculate CVaR h_b at b_minus
+        mu_mod = alpha.T @ self.mu_minus - beta
+        sigma_mod = get_mult_std(alpha, self.sigma_minus)
+
+        h_b_minus = mu_mod - (sigma_mod*f)/delta
+
+        # 3) Return overall expression
+        num = alpha.T @ self.theta_prime + h_b_minus + xi_b_minus
+
+        prob_staying = 0.5 * (1 + erf(num/get_mult_std(alpha, self.lambda_prime)))
+
+        return prob_staying
+
+    def prob_leaving_CVaR_GEKF(self, alpha, delta, beta):
+
+        return 1 - self.prob_staying_CVaR_GEKF(alpha, delta, beta)
 
     def get_belief(self):
         """Return the current belief (state estimate)."""

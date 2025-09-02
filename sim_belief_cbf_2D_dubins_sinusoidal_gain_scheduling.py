@@ -16,7 +16,7 @@ from sensor import noisy_sensor_mult as sensor
 
 # Sim Params
 dt = 0.001
-T = 30000# 5000
+T = 30000# EKF BECOMES UNSTABLE > 30000 !!! 
 dynamics =  DubinsMultCtrlDynamics() # UnicyleDynamics()
 
 # Sensor Params
@@ -155,6 +155,7 @@ cbf_values = []
 kalman_gains = []
 covariances = []
 in_covariances = [] # Innovation Covariance of EKF
+meas_matrices = [] # The "C" in Kalman gain
 prob_leave = [] # Probability of leaving safe set
 
 x_nom = [] # Store nominal trajectory
@@ -219,24 +220,11 @@ for t in tqdm(range(T), desc="Simulation Progress"):
         if estimator.name == "EKF":
             estimator.update(x_measured)
 
-        # prob_leave.append(estimator.compute_probability_bound(alpha, delta))
-    # else:
-    #     if len(prob_leave) > 0:
-    #         prob_leave.append(prob_leave[-1])
-    #     else:
-    #         prob_leave.append(-1)
+        prob_leave.append((t, estimator.prob_leaving_CVaR_GEKF(alpha, delta, beta)))
 
     x_estimated, p_estimated = estimator.get_belief()
 
-
-    # if (x_estimated[1] < wall_y and x_estimated[1] > -wall_y):
-    #     eta = 7.0
-    # else:
-    #     eta = 15.0
-
     eta=1.0
-
-    # traj_idx = update_trajectory_index(x_estimated[0:2], goal_x_nom[:, 0:2], traj_idx, eta=eta)
     goal_loc = goal_x_nom[t]
 
     # Store for plotting
@@ -271,14 +259,11 @@ plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
 plt.plot(x_nom[:, 0], x_nom[:, 1], "Green", label="Nominal Trajectory")
 plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
 plt.axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
-# plt.axhline(y=goal[1], color="purple", linestyle="dashed", linewidth=1, label="Goal")
-# plt.scatter(goal[0], goal[1], c="g", marker="*", s=200, label="Goal")
 plt.xlabel("x", fontsize=14)
 plt.ylabel("y", fontsize=14)
 plt.title(f"2D Trajectory ({estimator.name})", fontsize=14)
 plt.legend()
 plt.grid()
-# plt.show()
 
 # Plot controls
 h_vals   = cbf_values[:, 0]
@@ -286,7 +271,6 @@ h2_vals  = cbf_values[:, 1]
 plt.figure(figsize=(10, 10))
 plt.plot(time, h_vals, color='red', label=f"y < {wall_y}")
 plt.plot(time, h2_vals, color='purple', label=f"y > -{wall_y}")
-# plt.plot(time, np.array(clf_values), color='green', label="CLF")
 for i in range(m):
     plt.plot(time, u_traj[:, i], label=f"u_{i}")
 plt.xlabel("Time step (s)")
@@ -295,58 +279,6 @@ plt.title(f"Control Values ({estimator.name})")
 plt.xticks(fontsize=14)
 plt.yticks(fontsize=14)
 plt.legend(fontsize=14)
-# plt.show()
-
-
-# # Plot CLF (Debug)
-# plt.figure(figsize=(10, 10))
-# plt.plot(time, np.array(clf_values), color='green', label="CLF")
-# # plt.plot(time, list_lgv, color='blue', label="LgV")
-# plt.xlabel("Time step (s)")
-# plt.ylabel("Value")
-# plt.title(f"[Debug] CLF and LgV values ({estimator.name})")
-# # Tick labels font size
-# plt.xticks(fontsize=14)
-# plt.yticks(fontsize=14)
-# # Legend font size
-# plt.legend(fontsize=14)
-# plt.show()
-
-# # Plot CBF (Debug)
-
-# grad_mag = np.array([
-#     np.linalg.norm(np.asarray(g).squeeze()) for g in list_grad_h_b
-# ])
-
-# f_mag = np.array([
-#     np.linalg.norm(np.asarray(f).squeeze()) for f in list_f_b
-# ])
-
-# lfh_vals = np.array([
-#     (grad@fx).squeeze()
-#     for grad, fx in zip(list_grad_h_b, list_f_b)
-# ])
-
-# # list_lgv_np = np.array([float(val[0]) for val in list_lgv])
-# plt.figure(figsize=(10, 10))
-# # plt.plot(time, np.array(cbf_values), color='green', label="CBF")
-# # plt.plot(time, list_Lg_Lf_h, color='blue', label="Lg_Lf_h")
-# # plt.plot(time, list_rhs, color='red', label='rhs')
-# plt.plot(time, list_L_f_h, color='purple', label="L_f_h")
-# mplcursors.cursor() 
-# # plt.plot(time, list_L_f_2_h, color='black', label="L_f_2_h")
-# plt.plot(time, grad_mag, color='orange', label="|grad_h_b|")
-# plt.plot(time, f_mag, color='maroon', label="|f_b|")
-# plt.plot(time, lfh_vals, color = 'yellow', label="product")
-# plt.xlabel("Time step (s)")
-# plt.ylabel("Value")
-# plt.title(f"[Debug] CBF and Lg_Lf_h values ({estimator.name})")
-# # Tick labels font size
-# plt.xticks(fontsize=14)
-# plt.yticks(fontsize=14)
-# # Legend font size
-# plt.legend(fontsize=14)
-# plt.show()
 
 kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
 covariance_traces = [jnp.trace(P) for P in covariances]
@@ -354,35 +286,26 @@ inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 
 # Plot trace of Kalman gains and covariances
 plt.figure(figsize=(10, 10))
-plt.plot(time, np.array(kalman_gain_traces), "b-", label="Trace of Kalman Gain")
-plt.plot(time, np.array(covariance_traces), "r-", label="Trace of Covariance")
-# plt.plot(time, np.array(inn_cov_traces), "g-", label="Trace of Innovation Covariance")
-# plt.plot(time, np.array(prob_leave), "purple", label="P_leave")
+plt.plot(time, np.array(covariance_traces), color="red", linestyle="-", label="Trace of Covariance")
 plt.xlabel("Time Step (s)")
 plt.ylabel("Trace Value")
-plt.title(f"Trace of Kalman Gain and Covariance Over Time ({estimator.name})")
+plt.title(f"Trace of Covariance Over Time ({estimator.name})")
+plt.legend()
+plt.grid()
+
+# Probability of leaving safe set (CBF 1)
+times, probs = zip(*prob_leave)
+dist = wall_y - x_est
+plt.figure(figsize=(10, 10))
+plt.plot(times, probs, color="blue", linestyle="dashed", label="Probs leaving (CBF 1)")
+plt.title(f"Distance from safe boundary ({estimator.name})")
+plt.xlabel("Time Step (s)")
+plt.ylabel("Distance")
 plt.legend()
 plt.grid()
 plt.show()
 
-## Probability of leaving safe set
-
-
-# # Plot distance from obstacle
-
-# dist = wall_y - x_est
-
-# plt.figure(figsize=(10, 10))
-# plt.plot(time, dist[:, 0], color="red", linestyle="dashed")
-# plt.title(f"Distance from safe boundary ({estimator.name})")
-# plt.xlabel("Time Step (s)")
-# plt.ylabel("Distance")
-# plt.legend()
-# plt.grid()
-# plt.show()
-
 # Print Sim Params
-
 print("\n--- Simulation Parameters ---")
 
 print(dynamics.name)
