@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import random
 from jax.scipy.stats import norm
 from functools import partial
+from jax.scipy.special import erf, erfinv
 
 @jax.jit
 def sinusoidal_trajectory(t, A=1.0, omega=1.0, v=1.0, phase=0.0):

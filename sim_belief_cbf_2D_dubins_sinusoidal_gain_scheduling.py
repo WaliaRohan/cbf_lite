@@ -216,11 +216,13 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
         if estimator.name == "GEKF":
             estimator.update(x_measured)
+            prob_leave.append((t, estimator.prob_leaving_CVaR_GEKF(alpha, delta, beta)))
 
         if estimator.name == "EKF":
             estimator.update(x_measured)
+            prob_leave.append((t, estimator.prob_leaving_VaR_EKF(alpha, delta, beta)))
 
-        prob_leave.append((t, estimator.prob_leaving_CVaR_GEKF(alpha, delta, beta)))
+        
 
     x_estimated, p_estimated = estimator.get_belief()
 

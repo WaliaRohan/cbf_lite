@@ -99,25 +99,43 @@ class EKF:
         return self.x_hat, self.P
     
 
-    def compute_probability_bound(self, alpha, delta):
+    def prob_leaving_VaR_EKF(self, alpha, delta, beta):
         """
         Returns the probability bounds for a range of delta values.
         """
-        I = jnp.eye(self.K.shape[1])  # assuming K is (n x n)
 
-        Sigma = self.sigma_minus
+        def get_mult_std(alpha, cov):
+            """
+            Return std for multivariate random variable
+
+            Args:
+                alpha (vector): Linear gain
+                cov (matrix): Covariance matrix
+
+            Returns:
+                float: std
+            """
+            return jnp.sqrt(2 * alpha.T @ cov @ alpha)
+
+        # Compute xi b_minus
+        I = jnp.eye(self.dynamics.state_dim)
+
+        Sigma_minus = self.sigma_minus
         K = self.K
         Lambda = self.in_cov
-        H = jnp.eye(self.dynamics.state_dim) 
-        
-        alphaT_Sigma_alpha = alpha.T @ Sigma @ alpha
-        term1 = jnp.sqrt(2 * alphaT_Sigma_alpha)
-        term2 = jnp.sqrt(2 * alpha.T @ (I - K @ H) @ Sigma @ alpha)
+        H = jax.jacfwd(self.h)(self.x_hat.ravel())
+        var = (I - K@H)@Sigma_minus
+
+        term1 = get_mult_std(alpha, Sigma_minus)
+        term2 = get_mult_std(alpha, var)
+
         xi = erfinv(1 - 2 * delta) * (term1 - term2)
 
-        denominator = jnp.sqrt(2 * alpha.T @ Lambda @ alpha)
-        return 0.5 * (1 - erf(xi / denominator))
+        denominator = get_mult_std(alpha, Lambda)
 
+        prob = 0.5 * (1 - erf(xi / denominator))
+
+        return prob
 
 class GEKF:
     """Continuous-Discrete GEKF"""
