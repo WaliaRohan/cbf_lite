@@ -22,13 +22,21 @@ class EKF:
         self.R = R if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
 
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
+        self.innovation = jnp.array([[0.0]])
+
         self.sigma_minus = self.P
+        self.mu_minus = self.x_hat
 
         # Initialize observation function as identity function
         if h is None:
             self.h = lambda x: x.ravel()
         else:
             self.h = h
+
+        # Initialize S
+        H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) 
+        obs_dim = len(H_x)
+        self.S = H_x @ self.P @ H_x.T + self.R[:obs_dim, :obs_dim]
 
     @partial(jax.jit, static_argnums=0)   # treat `self` as static config
     def _predict(self, x_hat, P, u):
@@ -84,7 +92,10 @@ class EKF:
         self.K = self.P @ H_x.T @ S_inv
 
         # Update Innovation Covariance (For calculating probability bound)
+        self.S = S
         self.in_cov = self.K @ S @ self.K.T
+
+        self.innovation = y
 
         # Update state estimate
         self.x_hat = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # Order of K and y in multiplication matters!
@@ -93,6 +104,13 @@ class EKF:
 
         # Update covariance
         self.P = (jnp.eye(max(self.x_hat.shape)) - self.K @ H_x) @ self.P
+
+        # # Joseph Stabilization
+        # term = (jnp.eye(max(self.x_hat.shape)) - self.K @ H_x)
+
+        # self.P = term @ self.P @ term.T + self.K @ self.R[:obs_dim, :obs_dim] @ (self.K.T)
+
+
 
     def get_belief(self):
         """Return the current belief (state estimate)."""
@@ -137,6 +155,20 @@ class EKF:
 
         return prob
 
+    def NEES(self, x):
+
+        err = x - self.x_hat
+        NEES = err.T @ jnp.linalg.inv(self.P) @ err
+
+        return NEES
+
+    def NIS(self):
+
+        err = self.innovation
+        NIS = err.T @ self.S @ err
+
+        return NIS.squeeze()
+
 class GEKF:
     """Continuous-Discrete GEKF"""
     
@@ -160,6 +192,7 @@ class GEKF:
         self.R = R if R is not None else jnp.square(sigma_v)*jnp.eye(dynamics.state_dim) # Measurement noise covariance
          
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
+        self.innovation = jnp.array([[0.0]])
 
         # Initialize observation function as identity function
         if h is None:
@@ -182,6 +215,11 @@ class GEKF:
 
         # self.obs_dim = int(jnp.size(h(jnp.zeros(self.dynamics.state_dim))))
         self.K = jnp.zeros((self.dynamics.state_dim, self.obs_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
+
+        # Initialize S
+        H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) 
+        obs_dim = len(H_x)
+        self.S = H_x @ self.P @ H_x.T + self.R[:obs_dim, :obs_dim]
 
     @partial(jax.jit, static_argnums=0)   # treat `self` as static config
     def _predict(self, x_hat, P, u):
@@ -241,6 +279,8 @@ class GEKF:
         self.lambda_prime = self.K @ S @ self.K.T # innovation term covariance
         self.sigma_minus = self.P
         self.mu_minus = self.x_hat
+        self.innovation = y
+        self.S = S
 
         # Update state estimate
         self.x_hat = self.x_hat + self.theta_prime
@@ -248,9 +288,9 @@ class GEKF:
         # Update covariance
         self.P = self.P - jnp.matmul(self.K, jnp.transpose(C))
 
-    def prob_staying_CVaR_GEKF(self, alpha, delta, beta):
+    def prob_leaving_CVaR_GEKF(self, alpha, delta, beta):
         """
-        Returns probability of staying inside safe set (without buffer) for the
+        Returns probability of leaving the safe set for the
         CVaR GEKF.
 
         Args:
@@ -293,15 +333,50 @@ class GEKF:
         h_b_minus = mu_mod - (sigma_mod*f)/delta
 
         # 3) Return overall expression
-        num = alpha.T @ self.theta_prime + h_b_minus + xi_b_minus
+        # num = alpha.T @ self.theta_prime + h_b_minus + xi_b_minus
+        num = xi_b_minus
 
-        prob_staying = 0.5 * (1 + erf(num/get_mult_std(alpha, self.lambda_prime)))
+        prob_leaving = 0.5 * (1 - erf(num/(jnp.sqrt(2)*get_mult_std(alpha, self.lambda_prime))))
 
-        return prob_staying
+        return prob_leaving
 
-    def prob_leaving_CVaR_GEKF(self, alpha, delta, beta):
+    def prob_staying_CVaR_GEKF(self, alpha, delta, beta):
 
-        return 1 - self.prob_staying_CVaR_GEKF(alpha, delta, beta)
+        return 1 - self.prob_leaving_CVaR_GEKF(alpha, delta, beta)
+
+    # def NEES(self, x):
+    #     """
+    #     Calculate NEES at each timstep
+
+    #     Args:
+    #         x (jnp.array): True state vector
+
+    #     Returns:
+    #         Float: NEES value
+    #     """
+
+    #     err = x - self.x_hat
+    #     NEES = err.T @ jnp.linalg.inv(self.P) @ err
+
+    #     return NEES
+
+    def NEES(self, x_true):
+        err = x_true - self.x_hat              # (n,)
+        P = 0.5 * (self.P + self.P.T)          # enforce symmetry
+
+        # Solve using Cholesky instead of inverse
+        L = jnp.linalg.cholesky(P)             # P = L L^T
+        y = jnp.linalg.solve(L, err)           # L y = err
+        nees_val = y @ y   
+
+        return nees_val
+
+    def NIS(self):
+
+        err = self.innovation
+        NIS = err.T @ jnp.linalg.inv(self.S) @ err
+
+        return NIS.squeeze()
 
     def get_belief(self):
         """Return the current belief (state estimate)."""

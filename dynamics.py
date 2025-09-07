@@ -246,7 +246,7 @@ class DubinsMultCtrlDynamics:
         self.state_dim = 4
         """Initialize Dubins Car dynamics."""
         if Q is None:
-            self.Q = jnp.eye(4)*0 
+            self.Q = jnp.eye(self.state_dim)*0 
         else:
             self.Q = Q
 

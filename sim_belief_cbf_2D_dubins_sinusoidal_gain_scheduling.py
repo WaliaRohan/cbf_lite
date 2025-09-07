@@ -3,21 +3,29 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 # import mplcursors  # for enabling data cursor in matplotlib plots
 import numpy as np
-from jax import grad, jit
+from jax import jit
 from jaxopt import BoxOSQP as OSQP
 from tqdm import tqdm
 
 from cbfs import BeliefCBF
-from cbfs import gain_schedule_ctrl, sinusoidal_trajectory, update_trajectory_index, s_trajectory, straight_trajectory
+from cbfs import gain_schedule_ctrl, s_trajectory
 from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
+from scipy.stats import chi2
+import json
+
 # from sensor import ubiased_noisy_sensor as sensor
 
 # Sim Params
 dt = 0.001
-T = 30000# EKF BECOMES UNSTABLE > 30000 !!! 
-dynamics =  DubinsMultCtrlDynamics() # UnicyleDynamics()
+T = 75000# EKF BECOMES UNSTABLE > 30000 !!! 
+Q_scale_factor = 0.001
+dynamics =  DubinsMultCtrlDynamics(
+Q = jnp.diag(jnp.array([(0.1*Q_scale_factor)**2,
+                        (0.1*Q_scale_factor)**2,
+                        (0.005*Q_scale_factor)**2,
+                        (0.005*Q_scale_factor)**2]))) # UnicyleDynamics()
 
 # Sensor Params
 mu_u = 0.1
@@ -44,9 +52,9 @@ x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_n
 # x_initial_measurement = sensor(x_true, t=0, std=sigma_v) # unbiased_fixed_noise
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
-h = lambda x: jnp.array([x[1]])
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=h, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, h=h, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
+obs_fun = lambda x: jnp.array([x[1]])
+estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=obs_fun, x_init=x_initial_measurement)
+# estimator = EKF(dynamics, dt, h=obs_fun, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -157,6 +165,9 @@ covariances = []
 in_covariances = [] # Innovation Covariance of EKF
 meas_matrices = [] # The "C" in Kalman gain
 prob_leave = [] # Probability of leaving safe set
+NEES_list = []
+NIS_list = []
+
 
 x_nom = [] # Store nominal trajectory
 
@@ -223,7 +234,8 @@ for t in tqdm(range(T), desc="Simulation Progress"):
             prob_leave.append((t, estimator.prob_leaving_VaR_EKF(alpha, delta, beta)))
 
         
-
+    NEES_list.append(estimator.NEES(x_true))
+    NIS_list.append(estimator.NIS())
     x_estimated, p_estimated = estimator.get_belief()
 
     eta=1.0
@@ -231,12 +243,15 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     # Store for plotting
     u_traj.append(u_opt)
-    x_meas.append(x_measured)
+    x_meas.append(x_true.at[1].set(obs_fun(x_measured)[0]))
     x_est.append(x_estimated)
     kalman_gains.append(estimator.K)
     covariances.append(p_estimated)
     in_covariances.append(estimator.in_cov)
     x_nom.append(goal_loc[:2])
+
+with open("matrices.json", "w") as f:
+    json.dump([c.tolist() for c in covariances], f, indent=2)
 
 # Convert to JAX arrays
 x_traj = jnp.array(x_traj)
@@ -255,10 +270,13 @@ time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
 # Plot trajectory with y-values set to zero
 plt.figure(figsize=(10, 10))
-plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
+# plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
+plt.scatter(x_meas[:, 0], x_meas[:, 1],
+            color="green", marker="o", s=1.0, alpha=0.5,
+            label="Measured Trajectory")
 plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
 plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
-plt.plot(x_nom[:, 0], x_nom[:, 1], "Green", label="Nominal Trajectory")
+plt.plot(x_nom[:, 0], x_nom[:, 1], "black", label="Nominal Trajectory")
 plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
 plt.axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
 plt.xlabel("x", fontsize=14)
@@ -286,12 +304,32 @@ kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
 covariance_traces = [jnp.trace(P) for P in covariances]
 inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
 
-# Plot trace of Kalman gains and covariances
-plt.figure(figsize=(10, 10))
+# Trace of covariance 
+plt.figure(figsize=(10, 5))
 plt.plot(time, np.array(covariance_traces), color="red", linestyle="-", label="Trace of Covariance")
 plt.xlabel("Time Step (s)")
 plt.ylabel("Trace Value")
 plt.title(f"Trace of Covariance Over Time ({estimator.name})")
+plt.legend()
+plt.grid()
+
+# Plot NEES
+# --- Add NEES bounds overlay ---
+state_dim = dynamics.state_dim # degrees of freedom (change as needed)
+confidence = 0.95  # 95%, or set 0.99, 0.999, etc.
+alpha = 1 - confidence
+lower = chi2.ppf(alpha/2, df=state_dim)
+upper = chi2.ppf(1 - alpha/2, df=state_dim)
+# -------------------------------
+plt.figure(figsize=(10, 10))
+plt.axhline(lower, color="red", linestyle="--", label=f"Lower {confidence*100:.1f}% bound")
+plt.axhline(upper, color="green", linestyle="--", label=f"Upper {confidence*100:.1f}% bound")
+plt.axhline(state_dim, color="purple", linestyle="--", label=f"Desired value")
+plt.plot(time, np.array(NEES_list), color="green", linestyle="-", label="NEES")
+# plt.plot(time, np.array(NIS_list), color="blue", linestyle="-", label="NIS")
+plt.xlabel("Time Step (s)")
+plt.ylabel("Trace Value")
+plt.title(f"NEES over time ({estimator.name})")
 plt.legend()
 plt.grid()
 
