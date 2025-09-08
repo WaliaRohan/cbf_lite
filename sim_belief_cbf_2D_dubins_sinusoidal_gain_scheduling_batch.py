@@ -35,7 +35,7 @@ def getSimParams():
         "wall_y": 5.0,
         "lin_vel": lin_vel,
         "x_init": [0.0, 0.0, lin_vel, 0.8],
-        "estimator_type": "GEKF",
+        "estimator_type": "EKF",
         "CBF_ON": True,
     }
 
@@ -258,7 +258,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
 
         # Store for plotting
         u_traj.append(u_opt)
-        x_meas.append(x_measured)
+        x_meas.append(x_true.at[1].set(obs_fun(x_measured)[0]))
         x_est.append(x_estimated)
         kalman_gains.append(estimator.K)
         covariances.append(p_estimated)
@@ -267,7 +267,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
 
     # Convert to numpy arrays for plotting
     x_traj = np.array(x_traj).squeeze()
-    x_meas.append(x_true.at[1].set(obs_fun(x_measured)[0]))
+    x_meas = np.array(x_meas).squeeze()
     x_est = np.array(x_est).squeeze()
     u_traj = np.array(u_traj)
     cbf_values = jnp.array(cbf_values) 
@@ -402,9 +402,9 @@ def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
     print("\n--- Belief CBF Parameters ---")
 
 start_idx = 1
-end_idx = 4
+end_idx = 100
 
-save_freq = 2
+save_freq = 5
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "batch_results", timestamp)
