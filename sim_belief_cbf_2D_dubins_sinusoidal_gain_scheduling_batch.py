@@ -27,7 +27,7 @@ def getSimParams():
         
     sim_params = {
         "dt": 0.001,
-        "T": 15000,  # EKF BECOMES UNSTABLE > 30000 !!!
+        "T": 30000,  # EKF BECOMES UNSTABLE > 30000 !!!
         "dynamics": DubinsMultCtrlDynamics(Q = jnp.array([(0.1*Q_scale_factor)**2,
                                                           (0.1*Q_scale_factor)**2,
                                                           (0.005*Q_scale_factor)**2,
@@ -267,7 +267,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
 
     # Convert to numpy arrays for plotting
     x_traj = np.array(x_traj).squeeze()
-    x_meas = np.array(x_meas).squeeze()
+    x_meas.append(x_true.at[1].set(obs_fun(x_measured)[0]))
     x_est = np.array(x_est).squeeze()
     u_traj = np.array(u_traj)
     cbf_values = jnp.array(cbf_values) 
@@ -402,7 +402,7 @@ def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
     print("\n--- Belief CBF Parameters ---")
 
 start_idx = 1
-end_idx = 6
+end_idx = 4
 
 save_freq = 2
 
