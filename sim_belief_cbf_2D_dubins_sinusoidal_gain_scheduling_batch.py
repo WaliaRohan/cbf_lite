@@ -3,15 +3,16 @@ import jax.numpy as jnp
 import matplotlib.pyplot as plt
 # import mplcursors  # for enabling data cursor in matplotlib plots
 import numpy as np
-from jax import grad, jit
+from jax import jit
 from jaxopt import BoxOSQP as OSQP
 from tqdm import tqdm
 
 from cbfs import BeliefCBF
-from cbfs import gain_schedule_ctrl, sinusoidal_trajectory, update_trajectory_index, s_trajectory, straight_trajectory
+from cbfs import gain_schedule_ctrl, s_trajectory
 from dynamics import *
 from estimators import *
 from sensor import noisy_sensor_mult as sensor
+from scipy.stats import chi2
 # from sensor import ubiased_noisy_sensor as sensor
 
 # For logging results
@@ -22,11 +23,15 @@ import json
 def getSimParams():
 
     lin_vel = 5.0
+    Q_scale_factor = 0.001
         
     sim_params = {
         "dt": 0.001,
-        "T": 300,  # EKF BECOMES UNSTABLE > 30000 !!!
-        "dynamics": DubinsMultCtrlDynamics(),  # or UnicycleDynamics()
+        "T": 15000,  # EKF BECOMES UNSTABLE > 30000 !!!
+        "dynamics": DubinsMultCtrlDynamics(Q = jnp.array([(0.1*Q_scale_factor)**2,
+                                                          (0.1*Q_scale_factor)**2,
+                                                          (0.005*Q_scale_factor)**2,
+                                                          (0.005*Q_scale_factor)**2])),  # or UnicycleDynamics()
         "wall_y": 5.0,
         "lin_vel": lin_vel,
         "x_init": [0.0, 0.0, lin_vel, 0.8],
@@ -40,7 +45,7 @@ def getSimParams():
         "mu_v": 0.001,
         "sigma_v": jnp.sqrt(0.0005), # std deviation
         "sensor_update_frequency": 0.1, # Hz
-        "h": lambda x: jnp.array([x[1]])  # Observation Function
+        "obs_fun": lambda x: jnp.array([x[1]])  # Observation Function
     }
 
     control_params = {
@@ -77,7 +82,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     mu_v = sensor_params["mu_v"]
     sigma_v = sensor_params["sigma_v"]
     sensor_update_frequency = sensor_params["sensor_update_frequency"]
-    h = sensor_params["h"]
+    obs_fun = sensor_params["obs_fun"]
 
     # --- Unpack control_params ---
     U_MAX = control_params["U_MAX"]
@@ -104,9 +109,9 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
         x_initial_measurement = sensor(x_true, t=0, std=sigma_v, key=key) # unbiased_fixed_noise
 
     if estimator_type == "EKF":
-        estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
+        estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim), h=obs_fun)
     elif estimator_type == "GEKF":
-        estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+        estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement, h=obs_fun)
 
     # OSQP solver instance
     solver = OSQP()
@@ -190,6 +195,8 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
     in_covariances = [] # Innovation Covariance of EKF
     prob_leave = [] # Probability of leaving safe set
     x_nom = [] # Store nominal trajectory
+    NEES_list = []
+    NIS_list = []
 
     x_estimated, p_estimated = estimator.get_belief()
     x_measured = x_initial_measurement
@@ -243,6 +250,8 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
                 estimator.update(x_measured)
                 prob_leave.append((t, estimator.prob_leaving_VaR_EKF(alpha1, delta, beta)))
 
+        NEES_list.append(estimator.NEES(x_true))
+        NIS_list.append(estimator.NIS())
         x_estimated, p_estimated = estimator.get_belief()
 
         goal_loc = goal_x_nom[t]
@@ -256,102 +265,116 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
         in_covariances.append(estimator.in_cov)
         x_nom.append(goal_loc[:2])
 
-    # Convert to JAX arrays
-    x_traj = jnp.array(x_traj)
-
     # Convert to numpy arrays for plotting
     x_traj = np.array(x_traj).squeeze()
     x_meas = np.array(x_meas).squeeze()
     x_est = np.array(x_est).squeeze()
     u_traj = np.array(u_traj)
     cbf_values = jnp.array(cbf_values) 
+    covariance_traces = [jnp.trace(P) for P in covariances]
 
     x_nom = np.array(x_nom).squeeze()
 
+    h_vals   = cbf_values[:, 0]
+    h2_vals  = cbf_values[:, 1]
+    time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
+
+    fig, axs = plt.subplots(3, 2, figsize=(14, 18))  # 3 rows, 2 columns
+    axs = axs.ravel()  # flatten to 1D for easy indexing
+
+    # 1. Trajectories
+    axs[0].scatter(x_meas[:, 0], x_meas[:, 1], color="green", marker="o", s=1.0, alpha=0.5, label="Measured Trajectory")
+    axs[0].plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
+    axs[0].plot(x_est[:, 0], x_est[:, 1], color="orange", label="Estimated Trajectory")
+    axs[0].plot(x_nom[:, 0], x_nom[:, 1], "black", label="Nominal Trajectory")
+    axs[0].axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
+    axs[0].axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
+    axs[0].set_xlabel("x"); axs[0].set_ylabel("y")
+    axs[0].set_title(f"2D Trajectory ({estimator.name})")
+    axs[0].legend(); axs[0].grid()
+
+    # 2. Controls + barrier functions
+    axs[1].plot(time, h_vals, color='red', label=f"y < {wall_y}")
+    axs[1].plot(time, h2_vals, color='purple', label=f"y > -{wall_y}")
+    for i in range(m):
+        axs[1].plot(time, u_traj[:, i], label=f"u_{i}")
+    axs[1].set_xlabel("Time step (s)"); axs[1].set_ylabel("Control value")
+    axs[1].set_title(f"Control Values ({estimator.name})")
+    axs[1].legend(); axs[1].grid()
+
+    # 3. Trace of covariance
+    axs[2].plot(time, np.array(covariance_traces), color="red", linestyle="-", label="Trace of Covariance")
+    axs[2].set_xlabel("Time Step (s)"); axs[2].set_ylabel("Trace Value")
+    axs[2].set_title(f"Trace of Covariance Over Time ({estimator.name})")
+    axs[2].legend(); axs[2].grid()
+
+    # 4. NEES with chi-square bounds
+    state_dim = dynamics.state_dim
+    confidence = 0.95
+    alpha = 1 - confidence
+    lower = chi2.ppf(alpha/2, df=state_dim)
+    upper = chi2.ppf(1 - alpha/2, df=state_dim)
+    axs[3].axhline(lower, color="red", linestyle="--", label=f"Lower {confidence*100:.1f}% bound")
+    axs[3].axhline(upper, color="green", linestyle="--", label=f"Upper {confidence*100:.1f}% bound")
+    axs[3].axhline(state_dim, color="purple", linestyle="--", label="Expected value")
+    axs[3].plot(time, np.array(NEES_list), color="green", linestyle="-", label="NEES")
+    axs[3].set_xlabel("Time Step (s)"); axs[3].set_ylabel("NEES Value")
+    axs[3].set_title(f"NEES over Time ({estimator.name})")
+    axs[3].legend(); axs[3].grid()
+
+    # 5. Probability of leaving safe set
+    times = np.array([t for t, _ in prob_leave])
+    probs = np.array([p for _, p in prob_leave])
+    axs[4].plot(times/1000, probs, color="blue", linestyle="dashed", label="Probs leaving (CBF 1)")
+    axs[4].set_title(f"Probability of Leaving/ Staying ({estimator.name})")
+    axs[4].set_xlabel("Time Step (s)"); axs[4].set_ylabel("Probability")
+    axs[4].legend(); axs[4].grid()
+
+    # 6. Leave last subplot empty or add another metric
+    axs[5].axis("off")  # blank
+
+    nees_arr = np.array(NEES_list)
+    nees_coverage = 100 * np.mean((nees_arr >= lower) & (nees_arr <= upper))
+    cov_np    = np.asarray(covariance_traces)
+    probs_np  = np.asarray([p for _, p in prob_leave])  # if not already array
+
     # Define Metrics
     metrics = {
+        # Control
         "num_est_exceed":  np.sum(np.abs(x_est[:, 1]) > wall_y),
         "num_true_exceed": np.sum(np.abs(x_traj[:, 1]) > wall_y),
-        "max_est":             np.max(x_est[:, 1]),
         "max_true":            np.max(x_traj[:, 1]),
+        "min_true":        float(np.min(x_traj[:, 1])),
+        "max_est":             np.max(x_est[:, 1]),
+        "min_est":         float(np.min(x_est[:, 1])),
         "tracking_rmse":       np.sqrt(np.mean((x_traj - x_est) ** 2)),
-        # Add NEEMS
-        # Add "Final Covariance Value"
-        # Add max prob of leaving CBF 1
+
+        "pct_h_vals_lt0":  float(100.0 * np.mean(h_vals < 0)),
+        "pct_h2_vals_lt0": float(100.0 * np.mean(h2_vals < 0)),
+
+        # NEES / covariance
+        "nees_coverage_%": float(nees_coverage),
+        "mean_trace_P":    float(np.mean(cov_np)),
+        "final_trace_P":   float(cov_np[-1]),
+
+        # probability bounds
+        "mean_prob_bound": float(np.mean(probs_np)),
+        "max_prob_bound":  float(np.max(probs_np)),
+
         # Add max prob of leaving CBF 2
         # Add max prob of staying in CBF 1
         # Add max prob of staying in CBF 2
-        # Add mean prob of leaving CBF 1
         # Add mean prob of leaving CBF 2
         # Add mean prob of staying in CBF 1
         # Add mean prob of staying in CBF 2
     }
 
-    # Plot trajectory with y-values set to zero
-    plt.figure(figsize=(10, 10))
-    plt.plot(x_meas[:, 0], x_meas[:, 1], color="Green", linestyle=":", label="Measured Trajectory", alpha=0.5)
-    plt.plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
-    plt.plot(x_est[:, 0], x_est[:, 1], "Orange", label="Estimated Trajectory")
-    plt.plot(x_nom[:, 0], x_nom[:, 1], "Green", label="Nominal Trajectory")
-    plt.axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
-    plt.axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
-    plt.xlabel("x", fontsize=14)
-    plt.ylabel("y", fontsize=14)
-    plt.title(f"2D Trajectory ({estimator.name})", fontsize=14)
-    plt.legend()
-    plt.grid()
-
-    # # Plot controls
-    # h_vals   = cbf_values[:, 0]
-    # h2_vals  = cbf_values[:, 1]
-    # plt.figure(figsize=(10, 10))
-    # plt.plot(time, h_vals, color='red', label=f"y < {wall_y}")
-    # plt.plot(time, h2_vals, color='purple', label=f"y > -{wall_y}")
-    # for i in range(m):
-    #     plt.plot(time, u_traj[:, i], label=f"u_{i}")
-    # plt.xlabel("Time step (s)")
-    # plt.ylabel("Control value")
-    # plt.title(f"Control Values ({estimator.name})")
-    # plt.xticks(fontsize=14)
-    # plt.yticks(fontsize=14)
-    # plt.legend(fontsize=14)
-
-    # kalman_gain_traces = [jnp.trace(K) for K in kalman_gains]
-    # covariance_traces = [jnp.trace(P) for P in covariances]
-    # inn_cov_traces = [jnp.trace(cov) for cov in in_covariances]
-
-    # # Plot trace of Kalman gains and covariances
-    # plt.figure(figsize=(10, 10))
-    # plt.plot(time, np.array(covariance_traces), color="red", linestyle="-", label="Trace of Covariance")
-    # plt.xlabel("Time Step (s)")
-    # plt.ylabel("Trace Value")
-    # plt.title(f"Trace of Covariance Over Time ({estimator.name})")
-    # plt.legend()
-    # plt.grid()
-
-    # # Probability of leaving safe set (CBF 1)
-    # times  = np.array([t for t, _ in prob_leave])
-    # probs  = np.array([p for _, p in prob_leave])
-    # print(times)
-    # dist = wall_y - x_est
-    # plt.figure(figsize=(10, 10))
-    # plt.plot(times/1000, probs, color="blue", linestyle="dashed", label="Probs leaving (CBF 1)")
-    # plt.title(f"Probability of leaving/staying({estimator.name})")
-    # plt.xlabel("Time Step (s)")
-    # plt.ylabel("Distance")
-    # plt.legend()
-    # plt.grid()
-    # plt.show()
-
-    return metrics
+    return metrics, fig
 
 def printMetrics(metrics): 
     print("\n--- Results ---")
-    print("Number of estimate exceedances:",     metrics["num_est_exceed"])
-    print("Number of true exceedences:",         metrics["num_true_exceed"])
-    print("Max estimate value:",                 metrics["max_est"])
-    print("Max true value:",                     metrics["max_true"])
-    print("Tracking RMSE:",                      metrics["tracking_rmse"])
+    for k, v in metrics.items():
+        print(f"{k:20s}: {v}")
 
 def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params):
     def print_dict(d, name="dict"):
@@ -360,16 +383,16 @@ def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
             print(f"  {key}: {value}")
 
     print("\n--- Simulation Parameters ---")
-    print_dict(sim_params)
+    print_dict(sim_params, "Sim Params")
 
     print("\n-- Sensor Params ---")
-    print_dict(sensor_params)
+    print_dict(sensor_params, "Sensor Params")
     
     print("\n--- Environment Setup ---")
-    print_dict(control_params)
+    print_dict(control_params, "Env Setup")
  
     print("\n--- Control Parameters ---")
-    print_dict(belief_cbf_params)
+    print_dict(belief_cbf_params, "Control Params")
 
     if sim_params["CBF_ON"]:
         print("CBF: ON")
@@ -379,13 +402,15 @@ def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
     print("\n--- Belief CBF Parameters ---")
 
 start_idx = 1
-end_idx = 3
+end_idx = 6
 
-save_freq = 5
-base_path = "/home/speedracer1702/Projects/automata_lab/cbf_lite/Results/Summer 2025/sim_belief_dubins_sinusoidal/Batch"
-os.makedirs(base_path, exist_ok=True)
+save_freq = 2
+
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-save_path = os.path.join(base_path, f"run_EKF_nominal_{timestamp}.json")
+base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "batch_results", timestamp)
+os.makedirs(base_path, exist_ok=True)
+
+save_path = os.path.join(base_path, "summary.json")
 
 if __name__ == "__main__":
 
@@ -401,8 +426,14 @@ if __name__ == "__main__":
 
         key = jax.random.PRNGKey(i)
 
-        metrics = simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=key)
-        printMetrics(metrics) # For a single simuation
+        metrics, fig = simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=key)
+        
+        # printMetrics(metrics) # For a single simuation
+
+        # Save results for this iteration
+        with open(os.path.join(base_path, f"{i}_result.json"), "w") as f:
+                 json.dump({"metrics": {k: str(v) for k, v in metrics.items()}}, f, indent=2)
+        fig.savefig(os.path.join(base_path, f"{i}_result.png"), dpi=300) 
 
         if not metrics_sum:
             metrics_sum = {k: float(v) for k, v in metrics.items()}
