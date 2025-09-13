@@ -34,8 +34,8 @@ def getSimParams():
                                                           (0.005*Q_scale_factor)**2])),  # or UnicycleDynamics()
         "wall_y": 5.0,
         "lin_vel": lin_vel,
-        "x_init": [0.0, 0.0, lin_vel, 0.8],
-        "estimator_type": "EKF",
+        "x_init": [0.0, 0.0, lin_vel, 0.45],
+        "estimator_type": "GEKF",
         "CBF_ON": True,
     }
 
@@ -365,7 +365,7 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
 
     # Define Metrics
     metrics = {
-        # Control
+        # Control/Estimation
         "num_est_exceed":  np.sum(np.abs(x_est[:, 1]) > wall_y),
         "num_true_exceed": np.sum(np.abs(x_traj[:, 1]) > wall_y),
         "max_true":            np.max(x_traj[:, 1]),
@@ -373,7 +373,8 @@ def simulate(sim_params, sensor_params, control_params, belief_cbf_params, key=N
         "max_est":             np.max(x_est[:, 1]),
         "min_est":         float(np.min(x_est[:, 1])),
         "tracking_rmse":       np.sqrt(np.mean((x_traj - x_est) ** 2)),
-
+        "avg_acc": jnp.mean(u_traj[:, 0]),
+        "avg_w": jnp.mean(u_traj[:, 1]),
         "pct_h_vals_lt0":  float(100.0 * np.mean(h_vals < 0)),
         "pct_h2_vals_lt0": float(100.0 * np.mean(h2_vals < 0)),
 
@@ -427,12 +428,12 @@ def printSimParams(sim_params, sensor_params, control_params, belief_cbf_params)
     print("\n--- Belief CBF Parameters ---")
 
 start_idx = 1
-end_idx = 5
+end_idx = 50
 
 save_freq = 5
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "batch_results", timestamp)
+base_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "batch_results", "GEKF_acc", timestamp)
 os.makedirs(base_path, exist_ok=True)
 
 save_path = os.path.join(base_path, "summary.json")
