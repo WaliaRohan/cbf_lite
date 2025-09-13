@@ -243,7 +243,7 @@ class DubinsMultCtrlDynamics:
 
     def __init__(self, Q=None):
         self.name = "Dubins Dynamics"
-        self.state_dim = 4
+        self.state_dim = 3
         """Initialize Dubins Car dynamics."""
         if Q is None:
             self.Q = jnp.eye(self.state_dim)*0 
@@ -256,13 +256,13 @@ class DubinsMultCtrlDynamics:
         
         State x = [x_pos, y_pos, v, theta]
         """
-        v = x[2]
-        theta = x[3]
+        v = x[-2]
+        theta = x[-1]
         
         return jnp.array([
             [v * jnp.cos(theta)],  # x_dot
             [v * jnp.sin(theta)],  # y_dot
-            [jnp.zeros_like(v)],   # no drift in velocity
+            # [jnp.zeros_like(v)],   # no drift in velocity
             [jnp.zeros_like(theta)]    # theta_dot (no drift)
         ])
         
@@ -273,7 +273,7 @@ class DubinsMultCtrlDynamics:
         Control u = [lin_vel, ang_vel]
         """
         return jnp.array([
-            [0, 0],  # No control influence on x
+            # [0, 0],  # No control influence on x
             [0, 0],  # No control influence on y
             [1, 0],  # v_dot
             [0, 1]   # theta_dot

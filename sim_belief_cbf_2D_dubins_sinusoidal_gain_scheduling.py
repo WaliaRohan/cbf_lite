@@ -19,13 +19,12 @@ import json
 
 # Sim Params
 dt = 0.001
-T = 30000 # EKF BECOMES UNSTABLE > 30000 !!! 
-Q_scale_factor = 0.001
+T = 100000 # EKF BECOMES UNSTABLE > 30000 !!! 
+Q_scale_factor = 0.01
 dynamics =  DubinsMultCtrlDynamics(
-Q = jnp.diag(jnp.array([(0.1*Q_scale_factor)**2,
-                        (0.1*Q_scale_factor)**2,
-                        (0.005*Q_scale_factor)**2,
-                        (0.005*Q_scale_factor)**2]))) # UnicyleDynamics()
+Q = jnp.diag(jnp.array([(Q_scale_factor)**2,
+                        (Q_scale_factor)**2,
+                        (Q_scale_factor)**2]))) # UnicyleDynamics()
 
 # Sensor Params
 mu_u = 0.1
@@ -39,8 +38,8 @@ wall_y = 5.0
 
 # Initial state
 # x_init = [0.0, 0.0, 0.8] # x, y, v, theta
-lin_vel = 5.0
-x_init = [0.0, 0.0, lin_vel, 0.8]
+lin_vel = 3.0
+x_init = [0.0, lin_vel, 0.8]
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
@@ -52,21 +51,21 @@ x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_n
 # x_initial_measurement = sensor(x_true, t=0, std=sigma_v) # unbiased_fixed_noise
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
-obs_fun = lambda x: jnp.array([x[1]])
+obs_fun = lambda x: jnp.array([x[0]])
 estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=obs_fun, x_init=x_initial_measurement)
 # estimator = EKF(dynamics, dt, h=obs_fun, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
 # alpha = jnp.array([0.0, -1.0, 0.0])
-alpha = jnp.array([0.0, -1.0, 0.0, 0.0])
+alpha = jnp.array([-1.0, 0.0, 0.0])
 beta = jnp.array([-wall_y])
 delta = 0.001  # Probability of failure threshold
 cbf = BeliefCBF(alpha, beta, delta, n)
 
 # CBF 2
 # alpha2 = jnp.array([0.0, 1.0, 0.0])
-alpha2 = jnp.array([0.0, 1.0, 0.0, 0.0])
+alpha2 = jnp.array([1.0, 0.0, 0.0])
 beta2 = jnp.array([-wall_y])
 delta2 = 0.001  # Probability of failure threshold
 cbf2 = BeliefCBF(alpha2, beta2, delta2, n)
@@ -77,7 +76,7 @@ MAX_ANGULAR = 0.5
 U_MAX = np.array([MAX_LINEAR, MAX_ANGULAR])
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 50.0
-cbf_gain = 50.0  # CBF linear gain
+cbf_gain = 35.0  # CBF linear gain
 CBF_ON = True
 
 # OSQP solver instance
@@ -91,12 +90,13 @@ def solve_qp(b, goal_loc):
 
     x_estimated, sigma = cbf.extract_mu_sigma(b)
 
-    x_current = jnp.concatenate([x_estimated[:2], x_estimated[3:]]) # Deleting velocity fro mstate vector to match with goal_loc
+    x_current = jnp.concatenate([x_estimated[:1], x_estimated[2:]]) # Deleting velocity fro mstate vector to match with goal_loc
+    goal_loc = goal_loc[1:]
     u_nom = gain_schedule_ctrl(v_r=lin_vel,
                                x = x_current ,
                                ell=0.163,
                                x_d = goal_loc,
-                               lambda1=1.0, a1=16.0, a2=100.0)
+                               lambda1=1.0, a1=16.0, a2=50.0)
 
     # Compute CBF components
     h = cbf.h_b(b)
@@ -241,7 +241,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     # Store for plotting
     u_traj.append(u_opt)
-    x_meas.append(x_true.at[1].set(obs_fun(x_measured)[0]))
+    x_meas.append(x_true.at[0].set(obs_fun(x_measured)[0]))
     x_est.append(x_estimated)
     kalman_gains.append(estimator.K)
     covariances.append(p_estimated)
@@ -264,15 +264,19 @@ fig, axs = plt.subplots(3, 2, figsize=(14, 18))  # 3 rows, 2 columns
 axs = axs.ravel()  # flatten to 1D for easy indexing
 
 # 1. Trajectories
-axs[0].scatter(x_meas[:, 0], x_meas[:, 1], color="green", marker="o", s=1.0, alpha=0.5, label="Measured Trajectory")
-axs[0].plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
-axs[0].plot(x_est[:, 0], x_est[:, 1], color="orange", label="Estimated Trajectory")
-axs[0].plot(x_nom[:, 0], x_nom[:, 1], "black", label="Nominal Trajectory")
+axs[0].plot(time, x_traj[:, 0], "b-", label="True state (x)")
+axs[0].plot(time, x_est[:, 0], color="orange", label="Estimated state (x)")
+axs[0].plot(time, x_nom[:, 1], "black", label="Nominal state (x)")
+
 axs[0].axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
 axs[0].axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
-axs[0].set_xlabel("x"); axs[0].set_ylabel("y")
-axs[0].set_title(f"2D Trajectory ({estimator.name})")
-axs[0].legend(); axs[0].grid()
+axs[0].scatter(time, x_meas[:, 0], color="green", marker="o", s=1.0, alpha=0.5, label="Measured state (x)")
+
+axs[0].set_xlabel("Time [s]")
+axs[0].set_ylabel("x position")
+axs[0].set_title(f"x-position over time ({estimator.name})")
+axs[0].legend()
+axs[0].grid()
 
 # 2. Controls + barrier functions
 h_vals = cbf_values[:, 0]

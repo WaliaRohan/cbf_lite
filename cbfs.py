@@ -119,43 +119,16 @@ def gain_schedule_ctrl(v_r, x, x_d, ell=0.05, lambda1=1.0, a1=1.0, a2=1.0):
     """
     # Safe denominators for jit (avoid divide-by-zero near stops)
     e = x - x_d
-    eps = 0.0 # 1e-6
     vr = v_r
-    kx = lambda1
-    # ky = (a2 * ell) / (vr * vr + eps)
-    # ktheta = (a1 * ell) / (vr + eps)   # assumes vr>0 in normal use
-
-    # Tim Wheeler's formulation
     ky = (a1 * ell)/jnp.square(v_r)
     ktheta = (a2 * ell)/vr
 
 
-    K = jnp.array([[kx, 0.0, 0.0],
-                    [0, ky, ktheta]])
-
-    # w = u - u_d = [-kx*e_x, -(ky*e_y + ktheta*e_theta)]
-    # w1 = -kx * e[0]
-    # w2 = -(ky * e[1] + ktheta * e[2])
-
-    theta_d = x_d[-1]
-
-    rot = jnp.array([
-                    [jnp.cos(theta_d),  jnp.sin(theta_d), 0.0],
-                    [-jnp.sin(theta_d), jnp.cos(theta_d), 0.0],
-                    [              0.0,              0.0, 1.0]
-                    ])
-
-    x_ref = rot@x
-
-    # u = u_d + w with u_d = [v_r, 0]
+    K = jnp.array([[0.0, 0.0],
+                    [ky, ktheta]])
 
     u_d = jnp.array([vr, 0.0]) # Nominal steering angle. Currently zero?
     u = u_d - K@e
-
-    # v = vr + w1
-    # delta = w2               
-    # return jnp.array([v, delta])
-
     return u
 
 
