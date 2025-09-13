@@ -19,13 +19,13 @@ import json
 
 # Sim Params
 dt = 0.001
-T = 30000 # EKF BECOMES UNSTABLE > 30000 !!! 
+T = 60000 # EKF BECOMES UNSTABLE > 30000 !!! 
 Q_scale_factor = 0.001
 dynamics =  DubinsMultCtrlDynamics(
-Q = jnp.diag(jnp.array([(0.1*Q_scale_factor)**2,
-                        (0.1*Q_scale_factor)**2,
-                        (0.005*Q_scale_factor)**2,
-                        (0.005*Q_scale_factor)**2]))) # UnicyleDynamics()
+Q = jnp.diag(jnp.array([(Q_scale_factor)**2,
+                        (Q_scale_factor)**2,
+                        (Q_scale_factor)**2,
+                        (Q_scale_factor)**2]))) # UnicyleDynamics()
 
 # Sensor Params
 mu_u = 0.1
@@ -72,7 +72,7 @@ delta2 = 0.001  # Probability of failure threshold
 cbf2 = BeliefCBF(alpha2, beta2, delta2, n)
 
 # Control params
-MAX_LINEAR=lin_vel
+MAX_LINEAR=1.0
 MAX_ANGULAR = 0.5
 U_MAX = np.array([MAX_LINEAR, MAX_ANGULAR])
 clf_gain = 20.0 # CLF linear gain
@@ -91,13 +91,12 @@ def solve_qp(b, goal_loc):
 
     x_estimated, sigma = cbf.extract_mu_sigma(b)
 
-    x_current = jnp.concatenate([x_estimated[:2], x_estimated[3:]]) # Deleting velocity fro mstate vector to match with goal_loc
     u_nom = gain_schedule_ctrl(v_r=lin_vel,
-                               x = x_current ,
+                               x = x_estimated ,
                                ell=0.163,
-                               x_d = goal_loc,
+                               x_d = jnp.insert(goal_loc, 2, lin_vel),
                                lambda1=1.0, a1=16.0, a2=100.0)
-
+    
     # Compute CBF components
     h = cbf.h_b(b)
     L_f_hb, L_g_hb, L_f_2_h, Lg_Lf_h, grad_h_b, f_b = cbf.h_dot_b(b, dynamics) # ∇h(x)
@@ -148,7 +147,7 @@ def solve_qp(b, goal_loc):
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
-    return sol, h, h_2
+    return sol, h, h_2, u_nom
 
     # return u_nom
 
@@ -156,6 +155,7 @@ x_traj = []  # Store trajectory
 x_meas = [] # Measurements
 x_est = [] # Estimates
 u_traj = []  # Store controls
+u_nom_list = []
 clf_values = []
 cbf_values = []
 kalman_gains = []
@@ -199,7 +199,8 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     # target_goal_loc = sinusoidal_trajectory(t*dt, A=goal[1], omega=1.0, v=lin_vel)
 
-    sol, h, h_2 = solve_qp_cpu(belief, goal_loc)
+    sol, h, h_2, u_nom = solve_qp_cpu(belief, goal_loc)
+    u_nom_list.append(u_nom)
     # sol, h, h_2 = solve_qp(belief, goal_loc)
 
     # clf_values.append(V)
@@ -256,6 +257,7 @@ x_traj = np.array(x_traj).squeeze()
 x_meas = np.array(x_meas).squeeze()
 x_est = np.array(x_est).squeeze()
 u_traj = np.array(u_traj)
+u_nom_list = jnp.array(u_nom_list)
 cbf_values = jnp.array(cbf_values) 
 x_nom = np.array(x_nom).squeeze()
 time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
@@ -279,8 +281,10 @@ h_vals = cbf_values[:, 0]
 h2_vals = cbf_values[:, 1]
 axs[1].plot(time, h_vals, color='red', label=f"y < {wall_y}")
 axs[1].plot(time, h2_vals, color='purple', label=f"y > -{wall_y}")
+ctrl_labels=["a", "θ"]
 for i in range(m):
-    axs[1].plot(time, u_traj[:, i], label=f"u_{i}")
+    axs[1].plot(time, u_traj[:, i], label=f"{ctrl_labels[i]}")
+    axs[1].plot(time, u_nom_list[:, i], label=f"{ctrl_labels[i]}_nom")
 axs[1].set_xlabel("Time step (s)"); axs[1].set_ylabel("Control value")
 axs[1].set_title(f"Control Values ({estimator.name})")
 axs[1].legend(); axs[1].grid()

@@ -95,68 +95,111 @@ def straight_trajectory(T, y_val=0.0, lin_v=1.0):
     theta = jnp.zeros_like(T)
     return jnp.stack([x, y, theta], axis=0)
 
+
 @jax.jit
-def gain_schedule_ctrl(v_r, x, x_d, ell=0.05, lambda1=1.0, a1=1.0, a2=1.0):
+def gain_schedule_ctrl(v_r, x, x_d, ell=0.33, 
+                             lambda1=1.0, kv=1.0, a1=1.0, a2=1.0):
     """
-    Implements a gain scheduling based controller for trajectory tracking. It is
-    by linearizing dubin's dynamics about v = v_r, and theta = 0. This represents
-    the desired trajectory (x_d), which is essentially a straight path.
+    Gain-scheduled controller (acceleration form).
 
-    Source: R. Murray, Optimization-Based Control: Trajectory Generation and 
-            Tracking, v2.3h, Section 2.2
+    State x = [x, y, v, theta]
+    Desired state x_d = [x_d, y_d, v_d, theta_d]
 
-    Args:
-        v_r (float): Desired longitudinal velocity magnitude.
-        x (array): State vector
-        x_d (array): Desired state vector (defined in source as [v_r*t, y_r, and theta])
-        ell (float, optional): wheelbase. Defaults to 0.33.
-        lambda1 (float, optional): closed loop eigen value of longitudinal dynamics (e_x). Defaults to 1.0.
-        a1 (float, optional): coeff 1 of polynomial equation for theta. Defaults to 2.0.
-        a2 (float, optional): coeff 2 of polynomial equation for theta. Defaults to 4.0.
-
-    Returns:
-        _type_: _description_
+    Control output u = [a, omega]
+      a     = longitudinal acceleration
+      omega = yaw rate input
     """
-    # Safe denominators for jit (avoid divide-by-zero near stops)
-    e = x - x_d
-    eps = 0.0 # 1e-6
-    vr = v_r
+
+    # Errors
+    e_x = x[0] - x_d[0]
+    e_y = x[1] - x_d[1]
+    e_v = x[2] - v_r  # velocity error
+    e_theta = x[3] - x_d[3]
+
+    # Error vector
+    e = jnp.array([e_x, e_v, e_y, e_theta])
+
+    # Gains (scheduled)
     kx = lambda1
-    # ky = (a2 * ell) / (vr * vr + eps)
-    # ktheta = (a1 * ell) / (vr + eps)   # assumes vr>0 in normal use
+    ky = (a1 * ell) / (v_r**2)
+    ktheta = (a2 * ell) / v_r
 
-    # Tim Wheeler's formulation
-    ky = (a1 * ell)/jnp.square(v_r)
-    ktheta = (a2 * ell)/vr
+    # Gain matrix maps e -> [a, omega]
+    K = jnp.array([
+        [kx, kv, 0.0, 0.0],        # longitudinal channel
+        [0.0, 0.0, ky, ktheta]     # lateral/heading channel
+    ])
 
+    # Nominal input (zero for straight-line ref)
+    u_d = jnp.array([0.0, 0.0])
 
-    K = jnp.array([[kx, 0.0, 0.0],
-                    [0, ky, ktheta]])
-
-    # w = u - u_d = [-kx*e_x, -(ky*e_y + ktheta*e_theta)]
-    # w1 = -kx * e[0]
-    # w2 = -(ky * e[1] + ktheta * e[2])
-
-    theta_d = x_d[-1]
-
-    rot = jnp.array([
-                    [jnp.cos(theta_d),  jnp.sin(theta_d), 0.0],
-                    [-jnp.sin(theta_d), jnp.cos(theta_d), 0.0],
-                    [              0.0,              0.0, 1.0]
-                    ])
-
-    x_ref = rot@x
-
-    # u = u_d + w with u_d = [v_r, 0]
-
-    u_d = jnp.array([vr, 0.0]) # Nominal steering angle. Currently zero?
-    u = u_d - K@e
-
-    # v = vr + w1
-    # delta = w2               
-    # return jnp.array([v, delta])
+    # Control law
+    u = u_d - K @ e
 
     return u
+
+# @jax.jit
+# def gain_schedule_ctrl(v_r, x, x_d, ell=0.05, lambda1=1.0, a1=1.0, a2=1.0):
+#     """
+#     Implements a gain scheduling based controller for trajectory tracking. It is
+#     by linearizing dubin's dynamics about v = v_r, and theta = 0. This represents
+#     the desired trajectory (x_d), which is essentially a straight path.
+
+#     Source: R. Murray, Optimization-Based Control: Trajectory Generation and 
+#             Tracking, v2.3h, Section 2.2
+
+#     Args:
+#         v_r (float): Desired longitudinal velocity magnitude.
+#         x (array): State vector
+#         x_d (array): Desired state vector (defined in source as [v_r*t, y_r, and theta])
+#         ell (float, optional): wheelbase. Defaults to 0.33.
+#         lambda1 (float, optional): closed loop eigen value of longitudinal dynamics (e_x). Defaults to 1.0.
+#         a1 (float, optional): coeff 1 of polynomial equation for theta. Defaults to 2.0.
+#         a2 (float, optional): coeff 2 of polynomial equation for theta. Defaults to 4.0.
+
+#     Returns:
+#         _type_: _description_
+#     """
+#     # Safe denominators for jit (avoid divide-by-zero near stops)
+#     e = x - x_d
+#     eps = 0.0 # 1e-6
+#     vr = v_r
+#     kx = lambda1
+#     # ky = (a2 * ell) / (vr * vr + eps)
+#     # ktheta = (a1 * ell) / (vr + eps)   # assumes vr>0 in normal use
+
+#     # Tim Wheeler's formulation
+#     ky = (a1 * ell)/jnp.square(v_r)
+#     ktheta = (a2 * ell)/vr
+
+
+#     K = jnp.array([[kx, 0.0, 0.0],
+#                     [0, ky, ktheta]])
+
+#     # w = u - u_d = [-kx*e_x, -(ky*e_y + ktheta*e_theta)]
+#     # w1 = -kx * e[0]
+#     # w2 = -(ky * e[1] + ktheta * e[2])
+
+#     theta_d = x_d[-1]
+
+#     rot = jnp.array([
+#                     [jnp.cos(theta_d),  jnp.sin(theta_d), 0.0],
+#                     [-jnp.sin(theta_d), jnp.cos(theta_d), 0.0],
+#                     [              0.0,              0.0, 1.0]
+#                     ])
+
+#     x_ref = rot@x
+
+#     # u = u_d + w with u_d = [v_r, 0]
+
+#     u_d = jnp.array([vr, 0.0]) # Nominal steering angle. Currently zero?
+#     u = u_d - K@e
+
+#     # v = vr + w1
+#     # delta = w2               
+#     # return jnp.array([v, delta])
+
+#     return u
 
 
 def update_trajectory_index(system_pos, traj, index, eta):
