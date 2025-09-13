@@ -97,8 +97,7 @@ def straight_trajectory(T, y_val=0.0, lin_v=1.0):
 
 
 @jax.jit
-def gain_schedule_ctrl(v_r, x, x_d, ell=0.33, 
-                             lambda1=1.0, kv=1.0, a1=1.0, a2=1.0):
+def gain_schedule_ctrl(v_r, x, x_d, lambda1=1.0, kv=1.0, a1=1.0, a2=1.0):
     """
     Gain-scheduled controller (acceleration form).
 
@@ -121,8 +120,8 @@ def gain_schedule_ctrl(v_r, x, x_d, ell=0.33,
 
     # Gains (scheduled)
     kx = lambda1
-    ky = (a1 * ell) / (v_r**2)
-    ktheta = (a2 * ell) / v_r
+    ky = (a1) / (v_r)
+    ktheta = (a2)
 
     # Gain matrix maps e -> [a, omega]
     K = jnp.array([

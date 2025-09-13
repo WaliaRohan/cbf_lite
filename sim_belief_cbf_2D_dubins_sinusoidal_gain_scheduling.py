@@ -19,13 +19,13 @@ import json
 
 # Sim Params
 dt = 0.001
-T = 60000 # EKF BECOMES UNSTABLE > 30000 !!! 
-Q_scale_factor = 0.001
+T = 27000 # EKF BECOMES UNSTABLE > 30000 !!! 
+sig_q = 0.0001
 dynamics =  DubinsMultCtrlDynamics(
-Q = jnp.diag(jnp.array([(Q_scale_factor)**2,
-                        (Q_scale_factor)**2,
-                        (Q_scale_factor)**2,
-                        (Q_scale_factor)**2]))) # UnicyleDynamics()
+Q = jnp.diag(jnp.array([(sig_q)**2,
+                        (sig_q)**2,
+                        (sig_q/2)**2,
+                        (sig_q/2)**2]))) # UnicyleDynamics()
 
 # Sensor Params
 mu_u = 0.1
@@ -40,7 +40,7 @@ wall_y = 5.0
 # Initial state
 # x_init = [0.0, 0.0, 0.8] # x, y, v, theta
 lin_vel = 5.0
-x_init = [0.0, 0.0, lin_vel, 0.8]
+x_init = [0.0, 0.0, lin_vel, 0.45]
 
 # Initial state (truth)
 x_true = jnp.array(x_init)  # Start position
@@ -73,8 +73,8 @@ cbf2 = BeliefCBF(alpha2, beta2, delta2, n)
 
 # Control params
 MAX_LINEAR=1.0
-MAX_ANGULAR = 0.5
-U_MAX = np.array([MAX_LINEAR, MAX_ANGULAR])
+MAX_ANGULAR = 1.0
+U_MAX = jnp.array([MAX_LINEAR, MAX_ANGULAR])
 clf_gain = 20.0 # CLF linear gain
 clf_slack_penalty = 50.0
 cbf_gain = 50.0  # CBF linear gain
@@ -89,13 +89,14 @@ var_dim = m + 1 # ctrl dim + slack variable
 # @jit
 def solve_qp(b, goal_loc):
 
-    x_estimated, sigma = cbf.extract_mu_sigma(b)
+    x_estimated, _ = cbf.extract_mu_sigma(b)
 
     u_nom = gain_schedule_ctrl(v_r=lin_vel,
-                               x = x_estimated ,
-                               ell=0.163,
+                               x = x_estimated,
                                x_d = jnp.insert(goal_loc, 2, lin_vel),
                                lambda1=1.0, a1=16.0, a2=100.0)
+
+    u_nom = jnp.clip(u_nom, -U_MAX, U_MAX)
     
     # Compute CBF components
     h = cbf.h_b(b)
@@ -262,66 +263,79 @@ cbf_values = jnp.array(cbf_values)
 x_nom = np.array(x_nom).squeeze()
 time = dt*np.arange(T)  # assuming x_meas.shape[0] == N
 
-fig, axs = plt.subplots(3, 2, figsize=(14, 18))  # 3 rows, 2 columns
+fig, axs = plt.subplots(4, 2, figsize=(14, 18))  # 3 rows, 2 columns
+plt.subplots_adjust(
+    left=0.08,   # reduce left margin
+    right=0.95,  # reduce right margin
+    top=0.95,    # reduce top margin
+    bottom=0.08, # reduce bottom margin
+    hspace=0.2   # spacing between rows
+)
 axs = axs.ravel()  # flatten to 1D for easy indexing
 
 # 1. Trajectories
-axs[0].scatter(x_meas[:, 0], x_meas[:, 1], color="green", marker="o", s=1.0, alpha=0.5, label="Measured Trajectory")
-axs[0].plot(x_traj[:, 0], x_traj[:, 1], "b-", label="Trajectory (True state)")
-axs[0].plot(x_est[:, 0], x_est[:, 1], color="orange", label="Estimated Trajectory")
-axs[0].plot(x_nom[:, 0], x_nom[:, 1], "black", label="Nominal Trajectory")
+axs[0].scatter(x_meas[:, 0], x_meas[:, 1], color="green", marker="o", s=1.0, alpha=0.5, label="Measurements")
+axs[0].plot(x_traj[:, 0], x_traj[:, 1], "b-", label="True trajectory")
+axs[0].plot(x_est[:, 0], x_est[:, 1], color="orange", label="Estimated trajectory")
+axs[0].plot(x_nom[:, 0], x_nom[:, 1], "black", label="Nominal trajectory")
 axs[0].axhline(y=wall_y, color="red", linestyle="dashed", linewidth=1, label="Obstacle")
 axs[0].axhline(y=-wall_y, color="red", linestyle="dashed", linewidth=1)
-axs[0].set_xlabel("x"); axs[0].set_ylabel("y")
+axs[0].set_xlabel("x [m]"); axs[0].set_ylabel("y [m]")
 axs[0].set_title(f"2D Trajectory ({estimator.name})")
 axs[0].legend(); axs[0].grid()
 
-# 2. Controls + barrier functions
-h_vals = cbf_values[:, 0]
-h2_vals = cbf_values[:, 1]
-axs[1].plot(time, h_vals, color='red', label=f"y < {wall_y}")
-axs[1].plot(time, h2_vals, color='purple', label=f"y > -{wall_y}")
-ctrl_labels=["a", "θ"]
-for i in range(m):
-    axs[1].plot(time, u_traj[:, i], label=f"{ctrl_labels[i]}")
-    axs[1].plot(time, u_nom_list[:, i], label=f"{ctrl_labels[i]}_nom")
-axs[1].set_xlabel("Time step (s)"); axs[1].set_ylabel("Control value")
-axs[1].set_title(f"Control Values ({estimator.name})")
+# 2. Longitudinal acceleration
+axs[1].plot(time, u_traj[:, 0], label="a")
+axs[1].plot(time, u_nom_list[:, 0], label="a_nom")
+axs[1].set_xlabel("Time [s]"); axs[1].set_ylabel("Acceleration [m/s²]")
+axs[1].set_title(f"Longitudinal Acceleration ({estimator.name})")
 axs[1].legend(); axs[1].grid()
 
-# 3. Trace of covariance
-covariance_traces = [jnp.trace(P) for P in covariances]
-axs[2].plot(time, np.array(covariance_traces), color="red", linestyle="-", label="Trace of Covariance")
-axs[2].set_xlabel("Time Step (s)"); axs[2].set_ylabel("Trace Value")
-axs[2].set_title(f"Trace of Covariance Over Time ({estimator.name})")
+# 3. Yaw rate
+axs[2].plot(time, u_traj[:, 1], label="ω")
+axs[2].plot(time, u_nom_list[:, 1], label="ω_nom")
+axs[2].set_xlabel("Time [s]"); axs[2].set_ylabel("Yaw rate [rad/s]")
+axs[2].set_title(f"Yaw Rate ({estimator.name})")
 axs[2].legend(); axs[2].grid()
 
-# 4. NEES with chi-square bounds
+# 4. Barrier functions
+h_vals = cbf_values[:, 0]
+h2_vals = cbf_values[:, 1]
+axs[3].plot(time, h_vals, color='red', label=f"CBF: y < {wall_y}")
+axs[3].plot(time, h2_vals, color='purple', label=f"CBF: y > -{wall_y}")
+axs[3].set_xlabel("Time [s]"); axs[3].set_ylabel("Barrier value [m]")
+axs[3].set_title(f"Barrier Function Values ({estimator.name})")
+axs[3].legend(); axs[3].grid()
+
+# 5. Trace of covariance
+covariance_traces = [jnp.trace(P) for P in covariances]
+axs[4].plot(time, np.array(covariance_traces), color="red", linestyle="-", label="Trace of Covariance")
+axs[4].set_xlabel("Time [s]"); axs[4].set_ylabel("Trace value")
+axs[4].set_title(f"Trace of Covariance Over Time ({estimator.name})")
+axs[4].legend(); axs[4].grid()
+
+# 6. NEES with chi-square bounds
 state_dim = dynamics.state_dim
 confidence = 0.95
 alpha = 1 - confidence
 lower = chi2.ppf(alpha/2, df=state_dim)
 upper = chi2.ppf(1 - alpha/2, df=state_dim)
-axs[3].axhline(lower, color="red", linestyle="--", label=f"Lower {confidence*100:.1f}% bound")
-axs[3].axhline(upper, color="green", linestyle="--", label=f"Upper {confidence*100:.1f}% bound")
-axs[3].axhline(state_dim, color="purple", linestyle="--", label="Expected value")
-axs[3].plot(time, np.array(NEES_list), color="green", linestyle="-", label="NEES")
-axs[3].set_xlabel("Time Step (s)"); axs[3].set_ylabel("NEES Value")
-axs[3].set_title(f"NEES over Time ({estimator.name})")
-axs[3].legend(); axs[3].grid()
+axs[5].axhline(lower, color="red", linestyle="--", label=f"Lower {confidence*100:.1f}% bound")
+axs[5].axhline(upper, color="green", linestyle="--", label=f"Upper {confidence*100:.1f}% bound")
+axs[5].axhline(state_dim, color="purple", linestyle="--", label="Expected value")
+axs[5].plot(time, np.array(NEES_list), color="green", linestyle="-", label="NEES")
+axs[5].set_xlabel("Time [s]"); axs[5].set_ylabel("NEES value")
+axs[5].set_title(f"NEES over Time ({estimator.name})")
+axs[5].legend(); axs[5].grid()
 
-# 5. Probability of leaving safe set
+# 7. Probability of leaving safe set
 times = np.array([t for t, _ in prob_leave])
 probs = np.array([p for _, p in prob_leave])
-axs[4].plot(times/1000, probs, color="blue", linestyle="dashed", label="Probs leaving (CBF 1)")
-axs[4].set_title(f"Probability of Leaving/ Staying ({estimator.name})")
-axs[4].set_xlabel("Time Step (s)"); axs[4].set_ylabel("Probability")
-axs[4].legend(); axs[4].grid()
+axs[6].plot(times/1000, probs, color="blue", linestyle="dashed", label="Probs leaving (CBF 1)")
+axs[6].set_title(f"Probability of Leaving/ Staying ({estimator.name})")
+axs[6].set_xlabel("Time [s]"); axs[6].set_ylabel("Probability")
+axs[6].legend(); axs[6].grid()
 
-# 6. Leave last subplot empty or add another metric
-axs[5].axis("off")  # blank
-
-# plt.tight_layout()
 fig.savefig("Sin Gain Scheduling.png", dpi=300) 
 
 # Print Sim Params
@@ -370,6 +384,7 @@ print(f"{estimator.name} Tracking RMSE: ", np.sqrt(np.mean((x_traj - x_est) ** 2
 nees_arr = np.array(NEES_list)
 coverage = 100 * np.mean((nees_arr >= lower) & (nees_arr <= upper))
 print(f"Percentage of NEES values within {100*(1-alpha):.1f}% bounds: {coverage:.2f}%")
+print(f"Mean NEES: {jnp.mean(nees_arr)}")
 # --- covariance traces ---
 cov_traces = np.array(covariance_traces)
 mean_trace = np.mean(cov_traces)
