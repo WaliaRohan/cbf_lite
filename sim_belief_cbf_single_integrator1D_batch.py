@@ -52,7 +52,7 @@ def simulate_run(run, estimator_name):
     if estimator_name == "GEKF":
         estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
     elif estimator_name == "EKF":
-        estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+        estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
     print("Using ", estimator_name)
 
@@ -90,7 +90,7 @@ def simulate_run(run, estimator_name):
         
         # Compute CBF components
         h = cbf.h_b(b)
-        L_f_hb, L_g_hb = cbf.h_dot_b(b, dynamics) # ∇h(x)
+        L_f_hb, L_g_hb, _, _, _, _ = cbf.h_dot_b(b, dynamics) # ∇h(x)
 
         L_f_h = L_f_hb
         L_g_h = L_g_hb
@@ -251,7 +251,7 @@ def print_metrics(avg_metrics, estimator_name, runs):
 
 all_metrics = []
 
-runs = 25
+runs = 100
 
 estimator_name = "EKF"
 

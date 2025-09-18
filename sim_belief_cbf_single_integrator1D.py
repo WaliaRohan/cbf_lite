@@ -47,8 +47,8 @@ sigma_v = jnp.sqrt(0.0005)
 # sigma_v = jnp.sqrt(7.97e-5)
 
 x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v)
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=sigma_v*jnp.eye(dynamics.state_dim))
+# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, x_init=x_initial_measurement)
+estimator = EKF(dynamics, dt, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -85,7 +85,7 @@ def solve_qp(b):
     
     # Compute CBF components
     h = cbf.h_b(b)
-    L_f_hb, L_g_hb = cbf.h_dot_b(b, dynamics) # ∇h(x)
+    L_f_hb, L_g_hb, _, _, _, _ = cbf.h_dot_b(b, dynamics) # ∇h(x)
 
     L_f_h = L_f_hb
     L_g_h = L_g_hb
@@ -164,7 +164,7 @@ for t in tqdm(range(T), desc="Simulation Progress"):
         x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v)
 
         if estimator.name == "GEKF":
-            estimator.update_1D(x_measured)
+            estimator.update(x_measured)
 
         if estimator.name == "EKF":
             estimator.update(x_measured)
