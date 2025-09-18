@@ -1,4 +1,4 @@
-import jax
+import os
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 # import mplcursors  # for enabling data cursor in matplotlib plots
@@ -19,7 +19,7 @@ import json
 
 # Sim Params
 dt = 0.001
-T = 27000 # EKF BECOMES UNSTABLE > 30000 !!! 
+T = 30000 # EKF BECOMES UNSTABLE > 30000 !!! 
 sig_q = 0.0001
 dynamics =  DubinsMultCtrlDynamics(
 Q = jnp.diag(jnp.array([(sig_q)**2,
@@ -53,8 +53,8 @@ x_initial_measurement = sensor(x_true, 0, mu_u, sigma_u, mu_v, sigma_v) # mult_n
 # Observation function: Return second and 4rth element of the state vector
 # self.h = lambda x: x[jnp.array([1, 3])]
 obs_fun = lambda x: jnp.array([x[1]])
-estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=obs_fun, x_init=x_initial_measurement)
-# estimator = EKF(dynamics, dt, h=obs_fun, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
+# estimator = GEKF(dynamics, dt, mu_u, sigma_u, mu_v, sigma_v, h=obs_fun, x_init=x_initial_measurement)
+estimator = EKF(dynamics, dt, h=obs_fun, x_init=x_initial_measurement, R=jnp.square(sigma_v)*jnp.eye(dynamics.state_dim))
 
 # Define belief CBF parameters
 n = dynamics.state_dim
@@ -336,7 +336,19 @@ axs[6].set_title(f"Probability of Leaving/ Staying ({estimator.name})")
 axs[6].set_xlabel("Time [s]"); axs[6].set_ylabel("Probability")
 axs[6].legend(); axs[6].grid()
 
-fig.savefig("Sin Gain Scheduling.png", dpi=300) 
+figs_dir = "figs"
+
+# Create directory if it doesn't exist
+if not os.path.exists(figs_dir):
+    os.makedirs(figs_dir)
+
+for i, ax in enumerate(axs):
+    extent = ax.get_tightbbox(fig.canvas.get_renderer()).transformed(fig.dpi_scale_trans.inverted())
+    filename = os.path.join(figs_dir, f"subplot_{i+1}.png")
+    fig.savefig(filename, bbox_inches=extent, dpi=300)
+
+filename = os.path.join(figs_dir, "Sin Gain Scheduling.png")
+fig.savefig(filename, dpi=300) 
 
 # Print Sim Params
 print("\n--- Simulation Parameters ---")
