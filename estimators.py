@@ -18,7 +18,10 @@ class EKF:
 
         # Covariance initialization
         self.P = P_init if P_init is not None else jnp.eye(dynamics.state_dim) * 0.1  
-        self.Q = dynamics.Q # Process noise covariance
+        if Q is None:
+            self.Q = dynamics.Q # Process noise covariance
+        else:
+            self.Q = Q
         self.R = R if R is not None else jnp.eye(dynamics.state_dim) * 0.05  # Measurement noise covariance
 
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
@@ -48,6 +51,7 @@ class EKF:
 
         # Covariance Euler step: Ṗ = F P + P Fᵀ + Q
         P_next = P + self.dt * (F @ P + P @ F.T + self.Q)
+        P_next = 0.5*(P_next + P_next.T)
         return x_next, P_next
 
     def predict(self, u):
@@ -188,7 +192,10 @@ class GEKF:
 
         # Covariance initialization
         self.P = P_init if P_init is not None else jnp.eye(dynamics.state_dim) * 0.1  
-        self.Q = dynamics.Q # Process noise covariance
+        if Q is None:
+            self.Q = dynamics.Q # Process noise covariance
+        else:
+            self.Q = Q
         self.R = R if R is not None else jnp.square(sigma_v)*jnp.eye(dynamics.state_dim) # Measurement noise covariance
          
         self.in_cov = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # For tracking innovation covariance
@@ -231,6 +238,7 @@ class GEKF:
 
         # Covariance Euler step: Ṗ = F P + P Fᵀ + Q
         P_next = P + self.dt * (F @ P + P @ F.T + self.Q)
+        P_next = 0.5*(P_next + P_next.T)
         return x_next, P_next
 
     def predict(self, u):
