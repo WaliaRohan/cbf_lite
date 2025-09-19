@@ -66,7 +66,7 @@ def simulate_run(run, estimator_name):
     # Control params
     clf_gain = 20.0  # CLF linear gain
     clf_slack_penalty = 0.00025
-    cbf_gain = 200.0 # CBF linear gain
+    cbf_gain = 2.5 # CBF linear gain
 
     # Autodiff: Compute Gradients for CLF and CBF
     grad_V = grad(clf, argnums=0)  # ∇V(x)
@@ -182,7 +182,7 @@ def simulate_run(run, estimator_name):
             x_measured =  sensor(x_true, t, mu_u, sigma_u, mu_v, sigma_v, random.PRNGKey(run))
 
             if estimator.name == "GEKF":
-                estimator.update_1D(x_measured)
+                estimator.update(x_measured)
 
             if estimator.name == "EKF":
                 estimator.update(x_measured)
