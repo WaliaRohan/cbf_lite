@@ -189,7 +189,7 @@ class GEKF:
         H_x = self.H_x
         obs_dim = self.obs_dim
 
-        z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
+        z_obs = z # This might not be technically correct, but here I am just extracting the second state from the measurement
 
         h_z = self.h(self.x_hat)
         E = (1 + mu_u)*h_z + mu_v # This is the "observation function output" for GEKF
