@@ -181,7 +181,7 @@ class DubinsDynamics:
             [0, 0],  # No control influence on x
             [0, 0],  # No control influence on y
             [1, 0],  # v_dot
-            [0, 1]   # theta_dot
+            [0, 2.0]   # theta_dot
         ])
 
     @partial(jax.jit, static_argnums=0)
