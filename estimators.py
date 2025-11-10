@@ -118,8 +118,7 @@ class GEKF:
     """Continuous-Discrete GEKF"""
     
     def __init__(self, dynamics, mu_u, sigma_u, mu_v, sigma_v, h = None, x_init=None, P_init=None, Q=None, R=None):
-        self.dynamics = dynamics  # System dynamics model
-        self.K = jnp.zeros((dynamics.state_dim, dynamics.state_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
+        self.dynamics = dynamics  # System dynamics model First Kalman gain get's updated during first measurement.
         self.name = "GEKF"
 
         self.mu_u = mu_u
@@ -155,7 +154,7 @@ class GEKF:
         self.obs_dim = len(self.H_x) # Number of rows in H_X == observation space dim
 
         # self.obs_dim = int(jnp.size(h(jnp.zeros(self.dynamics.state_dim))))
-        self.K = jnp.zeros((self.dynamics.state_dim, self.obs_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
+        self.K = 0.5*jnp.ones((self.dynamics.state_dim, self.obs_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
 
     @partial(jax.jit, static_argnums=0)   # treat `self` as static config
     def _predict(self, x_hat, P, u, dt):
@@ -189,7 +188,7 @@ class GEKF:
         H_x = self.H_x
         obs_dim = self.obs_dim
 
-        z_obs = z # This might not be technically correct, but here I am just extracting the second state from the measurement
+        z_obs = 1.0 - z # Subtracting from one since model has y flipped (y decreases from right to left)
 
         h_z = self.h(self.x_hat)
         E = (1 + mu_u)*h_z + mu_v # This is the "observation function output" for GEKF
@@ -207,6 +206,7 @@ class GEKF:
         S = S_term_1 + jnp.square(sigma_u)*M + self.R[:obs_dim, :obs_dim]
 
         self.K = jnp.matmul(C, jnp.linalg.inv(S))
+        self.K = jnp.array([[0.0], [1.0], [0.0], [0.0]])
 
         # Update state estimate
         self.x_hat = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # double transpose because of how state is defined.
