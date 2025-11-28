@@ -145,13 +145,14 @@ class GEKF:
             self.h = h
 
         # H_x Jacobian of measurement function wrt state vector
-        self.H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
+        # self.H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len).
+        self.H_x = jax.jacfwd(self.h) 
         """
         NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
         state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
         """
 
-        self.obs_dim = len(self.H_x) # Number of rows in H_X == observation space dim
+        self.obs_dim = len(self.H_x(self.x_hat.ravel())) # Number of rows in H_X == observation space dim
 
         # self.obs_dim = int(jnp.size(h(jnp.zeros(self.dynamics.state_dim))))
         self.K = 0.5*jnp.ones((self.dynamics.state_dim, self.obs_dim)) # Not sure if this matters. Other than for plotting. First Kalman gain get's updated during first measurement.
@@ -165,7 +166,26 @@ class GEKF:
         F = jax.jacfwd(f, argnums=0)(x_hat, u)
 
         # Covariance Euler step: Ṗ = F P + P Fᵀ + Q
-        P_next = P + dt * (F @ P + P @ F.T + self.Q)
+        # P_next = P + dt * (F @ P + P @ F.T + self.Q)
+        # return x_next, P_next
+
+        P_dot = (F @ P + P @ F.T + self.Q)
+        P_new = self.P + P_dot * dt
+
+        # Symmetrize first (important)
+        P_sym = 0.5 * (P_new + P_new.T)
+
+        # Eigen-decomposition
+        w, V = jnp.linalg.eigh(P_sym)
+
+        # Clamp eigenvalues (negative → 0)
+        w_clamped = jnp.clip(w, a_min=0.0)
+
+        # Reconstruct PSD matrix
+        P_next = V @ jnp.diag(w_clamped) @ V.T
+
+        # self.P = jnp.where(self.P < 0, self.P, 0.0) # Debug only, remove later
+
         return x_next, P_next
 
     def predict(self, u, dt):
@@ -174,6 +194,8 @@ class GEKF:
         
         See (Page 274, Table 5.1, Optimal and Robust Estimation)        
         """
+
+        # print(f"Pred dt: {dt}")
         self.x_hat, self.P = self._predict(self.x_hat, self.P, u, dt)
 
     def update(self, z):
@@ -185,7 +207,7 @@ class GEKF:
         sigma_u = self.sigma_u
         mu_v = self.mu_v
 
-        H_x = self.H_x
+        H_x = self.H_x(self.x_hat.ravel())
         obs_dim = self.obs_dim
 
         z_obs = 1.0 - z # Subtracting from one since model has y flipped (y decreases from right to left)
@@ -205,8 +227,10 @@ class GEKF:
         S_term_1 = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx)))  # Perform matrix multiplication
         S = S_term_1 + jnp.square(sigma_u)*M + self.R[:obs_dim, :obs_dim]
 
+        # What value of P would give nice C and S?
+        # Where else is value of P being changed?
+        
         self.K = jnp.matmul(C, jnp.linalg.inv(S))
-        self.K = jnp.array([[0.0], [1.0], [0.0], [0.0]])
 
         # Update state estimate
         self.x_hat = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # double transpose because of how state is defined.
@@ -214,51 +238,22 @@ class GEKF:
         # Update covariance
         self.P = self.P - jnp.matmul(self.K, jnp.transpose(C))
 
-    # @partial(jax.jit, static_argnums=0)   # treat `self` as static
-    # def _update(self, z):
-    #     mu_u = self.mu_u
-    #     sigma_u = self.sigma_u
-    #     mu_v = self.mu_v
+        # Symmetrize first (important)
+        P_sym = 0.5 * (self.P + self.P.T)
 
-    #     # H_x Jacobian of measurement function wrt state vector
-    #     H_x = jax.jacfwd(self.h)(self.x_hat.ravel()) # The output of this should be (obs_dim, state_vector_len). 
-    #     """
-    #     NOTE: If H_x's shape is not (obs_dim, state_vector_len), ensure that the "h" operates on 1-dimensional
-    #     state vector (x_dim, ) and the input (state vector value) at which jacobian needs to be calculted is also dimensionless.
-    #     """
+        # Eigen-decomposition
+        w, V = jnp.linalg.eigh(P_sym)
 
-    #     obs_dim = self.obs_dim
+        # Clamp eigenvalues (negative → 0)
+        w_clamped = jnp.clip(w, a_min=0.0)
 
-    #     z_obs = self.h(z) # This might not be technically correct, but here I am just extracting the second state from the measurement
+        # Reconstruct PSD matrix
+        self.P = V @ jnp.diag(w_clamped) @ V.T
+        # print(f"P: {jnp.linalg.norm(self.P, ord='fro')}, K: {jnp.linalg.norm(self.K, ord='fro')}, y_pred: {self.x_hat[1]}, z: {z_obs}")
+        # print(f"P_y: {self.P[1, 1]}, K: {jnp.linalg.norm(self.K, ord='fro')}, y_pred: {self.x_hat[1]}, z: {z_obs}")
+        # print(f"P:\n{self.P}\nK: {jnp.linalg.norm(self.K, ord='fro')}, y_pred: {self.x_hat[1]}, z: {z_obs}")
 
-    #     h_z = self.h(self.x_hat)
-    #     E = (1 + mu_u)*h_z + mu_v # This is the "observation function output" for GEKF
-
-    #     y = (z_obs - E) # Innovation term: note self.x_hat comes from identity observation model
-    #     y = jnp.reshape(y, (obs_dim, 1)) 
-
-    #     dhdx = H_x
-
-    #     C = (1 + mu_u)*jnp.matmul(self.P, jnp.transpose(dhdx))  # Perform the matrix multiplication
-        
-    #     M = jnp.diag(jnp.diag(jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx))) + jnp.matmul(h_z, jnp.transpose(h_z))))
-        
-    #     S_term_1 = jnp.square(1 + mu_u)*jnp.matmul(dhdx, jnp.matmul(self.P, jnp.transpose(dhdx)))  # Perform matrix multiplication
-    #     S = S_term_1 + jnp.square(sigma_u)*M + self.R[:obs_dim, :obs_dim]
-
-    #     K = jnp.matmul(C, jnp.linalg.inv(S))
-    #     # K = jnp.linalg.solve(S, C.T).T  
-
-    #     # Update state estimate
-    #     x_hat_next = self.x_hat + (self.K@y).reshape(self.x_hat.shape) # double transpose because of how state is defined.
-
-    #     # Update covariance
-    #     P_next = self.P - jnp.matmul(self.K, jnp.transpose(C))
-
-    #     return x_hat_next, P_next, K
-
-    # def update(self, z):
-    #     self.x_hat, self.P, self.K = self._update(z)
+        return z_obs
 
     def compute_probability_bound(self, alpha, delta):
         """
