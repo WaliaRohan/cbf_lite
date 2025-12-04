@@ -148,7 +148,7 @@ def solve_qp(b, goal_loc):
 
     # Solve the QP using jaxopt OSQP
     sol = solver.run(params_obj=(Q, c), params_eq=A, params_ineq=(l, u)).params
-    return sol, h, h_2, u_nom
+    return sol, u_nom, sol, h, L_f_h, L_f_2_h, Lg_Lf_h, rhs, h_2, L_f_h_2, L_f_2_h_2, Lg_Lf_h_2, rhs2
 
     # return u_nom
 
@@ -167,6 +167,14 @@ prob_leave = [] # Probability of leaving safe set
 NEES_list = []
 NIS_list = []
 
+left_lglfh_list = []
+left_rhs_list = []
+left_l_f_h_list = []
+left_l_f_2_h_list = []
+right_lglfh_list = []
+right_rhs_list = []
+right_l_f_h_list = []
+right_l_f_2_h_list = []
 
 x_nom = [] # Store nominal trajectory
 
@@ -200,9 +208,18 @@ for t in tqdm(range(T), desc="Simulation Progress"):
 
     # target_goal_loc = sinusoidal_trajectory(t*dt, A=goal[1], omega=1.0, v=lin_vel)
 
-    sol, h, h_2, u_nom = solve_qp_cpu(belief, goal_loc)
-    u_nom_list.append(u_nom)
+    # sol, h, h_2, u_nom = solve_qp_cpu(belief, goal_loc)
     # sol, h, h_2 = solve_qp(belief, goal_loc)
+    sol, u_nom, sol, h, L_f_h, L_f_2_h, Lg_Lf_h, rhs, h_2, L_f_h_2, L_f_2_h_2, Lg_Lf_h_2, rhs2 = solve_qp_cpu(belief, goal_loc)
+    u_nom_list.append(u_nom)
+    left_lglfh_list.append(Lg_Lf_h)
+    left_rhs_list.append(rhs)
+    left_l_f_h_list.append(L_f_h)
+    left_l_f_2_h_list.append(L_f_2_h)
+    right_lglfh_list.append(Lg_Lf_h_2)
+    right_rhs_list.append(rhs2)
+    right_l_f_h_list.append(L_f_h)
+    right_l_f_2_h_list.append(L_f_h_2)
 
     # clf_values.append(V)
     cbf_values.append([h, h_2])
@@ -409,4 +426,123 @@ max_prob  = np.max(probs)
 print(f"Mean probability bound: {mean_prob:.4f}")
 print(f"Max probability bound:  {max_prob:.4f}")
 
-# Plot distance from safety boudary of estimates, max estimate value, 
+left_lglfh = np.array(left_lglfh_list)
+right_lglfh = np.array(right_lglfh_list)
+left_rhs = np.array(left_rhs_list)
+right_rhs = np.array(right_rhs_list)
+
+right_l_f_h   = np.array(right_l_f_h_list)
+right_l_f_2_h = np.array(right_l_f_2_h_list)
+left_l_f_h    = np.array(left_l_f_h_list)
+left_l_f_2_h  = np.array(left_l_f_2_h_list)
+
+# ============================================================
+#                     FIGURE 7
+#       Compare ω = u_opt[:,1]  vs  -RHS / LgLfh[:,1]
+# ============================================================
+
+T = len(right_lglfh)
+time = np.arange(T)
+
+u_opt_list = np.array(u_traj)
+
+# Extract the second control input (ω)
+u2 = u_opt_list[:, 1]
+
+# Extract the second coefficient of Lg_Lf_h for the right CBF
+LgLfh_right_ang = right_lglfh[:, 1]
+
+# Compute the HOCBF-implied upper bound on u2
+hocbf_bound = -right_rhs.squeeze() / LgLfh_right_ang   # elementwise division
+
+# Create 3-subplot figure
+fig7, axes7 = plt.subplots(3, 1, figsize=(12, 14), sharex=True)
+
+# =====================================
+# Subplot 1 — ω vs HOCBF Bound
+# =====================================
+ax7 = axes7[0]
+
+MAX_ANGULAR = 10.0
+u2_clipped = np.clip(u2, -MAX_ANGULAR, MAX_ANGULAR)
+
+ax7.plot(time, u2, label="u_opt ω (heading)", color="red")
+ax7.plot(time, hocbf_bound, label="-RHS / LgLf_h[1] (bound)", linestyle="--", color="gray", alpha=0.4)
+
+ax7.set_title("Figure 7: Heading Control vs HOCBF-implied Bound")
+ax7.set_ylabel("ω (rad/s)")
+ax7.grid(True)
+ax7.legend()
+
+
+# =====================================
+# Subplot 2 — CBF higher-order terms
+# =====================================
+ax_terms = axes7[1]
+
+alpha = cbf_gain
+roots = np.array([-0.75])  # select stable root
+coeff = alpha * np.poly(roots)
+
+h_ddot  = right_l_f_2_h.squeeze()
+
+term_c1 = -coeff[0] * right_l_f_h
+term_c2 = -coeff[1] * h2_vals
+
+ax_terms.plot(time, term_c1, label="-α c₁ ḣ", color="blue")
+ax_terms.plot(time, term_c2, label="-α c₂ h",  color="green")
+ax_terms.plot(time, -right_l_f_2_h, label="-L_f² h", color="black")
+
+ax_terms.set_title("Right CBF Higher-Order Terms")
+ax_terms.set_ylabel("Value")
+ax_terms.grid(True)
+ax_terms.legend()
+
+
+# =====================================
+# Subplot 3 — New: LgLf_h Right Angular Component
+# =====================================
+ax_ang = axes7[2]
+
+ax_ang.plot(time, LgLfh_right_ang, label="LgLfₕ right angular term", color="purple")
+
+ax_ang.set_title("LgLfₕ Angular Component (Right CBF)")
+ax_ang.set_xlabel("Time Step")
+ax_ang.set_ylabel("Value")
+ax_ang.grid(True)
+ax_ang.legend()
+
+plt.show()
+
+
+# ------------------------------
+# Prepare arrays for saving
+# ------------------------------
+save_dict = {
+    "x_traj": np.array(x_traj).squeeze(),
+    "x_meas": np.array(x_meas).squeeze(),
+    "x_est": np.array(x_est).squeeze(),
+    "u_traj": np.array(u_traj),
+    "u_nom": np.array(u_nom_list),
+    "cbf_values": np.array(cbf_values),
+    "x_nom": np.array(x_nom).squeeze(),
+    "time": dt * np.arange(T),
+    
+    "left_lglfh": np.array(left_lglfh_list),
+    "right_lglfh": np.array(right_lglfh_list),
+    "left_rhs": np.array(left_rhs_list),
+    "right_rhs": np.array(right_rhs_list),
+
+    "right_l_f_h_full": np.array(right_l_f_h_list),
+    "right_l_f_2_h_full": np.array(right_l_f_2_h_list),
+    "left_l_f_h_full": np.array(left_l_f_h_list),
+    "left_l_f_2_h_full": np.array(left_l_f_2_h_list),
+}
+
+# ------------------------------
+# Save as compressed archive
+# ------------------------------
+output_path = f"sim_sinusoidal_{estimator.name}.npz"
+np.savez_compressed(output_path, **save_dict)
+
+print(f"\n Sim data saved to:  {output_path}")
