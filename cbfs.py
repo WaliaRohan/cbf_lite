@@ -484,7 +484,7 @@ class BeliefCBF:
         Given a High-Order BCBF linear inequality constraint of relative
         degree 2: 
 
-            h_ddot >= [alpha1 alpha2].T [h_dot h]
+            h_ddot >= -[alpha1 alpha2].T [h_dot h]
 
                 where:
                     h_dot = LfH
@@ -493,7 +493,7 @@ class BeliefCBF:
         This function calculates the right-hand-side (RHS) of the following
         resulting QP linear inequality:
 
-            -LgLfh * u <= -[alpha1 alpha2].T [Lfh h] + Lf^2h
+            -LgLfh * u <= [alpha1 alpha2].T [Lfh h] + Lf^2h
 
         Args:
             b (jax.Array): belief vector
