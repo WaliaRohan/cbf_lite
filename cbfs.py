@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from jax import random
 from jax.scipy.stats import norm
 from functools import partial
+from jax.scipy.stats.norm import ppf, pdf
 
 @jax.jit
 def sinusoidal_trajectory(t, A=1.0, omega=1.0, v=1.0, phase=0.0):
@@ -278,6 +279,19 @@ KEY = random.PRNGKey(0)
 KEY, SUBKEY = random.split(KEY)
 
 
+# @jax.jit
+def _extract_mu_sigma_jit(b, n):
+    mu = b[:n]
+    vec_sigma = b[n:]
+
+    sigma = jnp.zeros((n, n))
+    upper = jnp.triu_indices(n)
+
+    sigma = sigma.at[upper].set(vec_sigma)
+    sigma = sigma + sigma.T - jnp.diag(jnp.diag(sigma))
+
+    return mu, sigma
+
 class BeliefCBF:
     def __init__(self, alpha, beta, delta, n):
         """
@@ -291,17 +305,10 @@ class BeliefCBF:
         self.delta = delta
         self.n = n
 
+    
     def extract_mu_sigma(self, b):
-        mu = b[:self.n]  # Extract mean vector
-        vec_sigma = b[self.n:] # Extract upper triangular part of Sigma
+        return _extract_mu_sigma_jit(b, self.n)
 
-        # Reconstruct full symmetric covariance matrix from vec(Sigma)
-        sigma = jnp.zeros((self.n, self.n))
-        upper_indices = jnp.triu_indices(self.n)  # Get upper triangular indices
-        sigma = sigma.at[upper_indices].set(vec_sigma)
-        sigma = sigma + sigma.T - jnp.diag(jnp.diag(sigma))  # Enforce symmetry
-
-        return mu, sigma
     
     @partial(jax.jit, static_argnums=0)   # treat `self` as static
     def get_b_vector(self, mu, sigma):
@@ -316,24 +323,21 @@ class BeliefCBF:
 
     def h_b(self, b):
         '''
-        Computes CVaR belief CBF for a Multivariate Guassian Random Variable Y
-
-        Reference: Calculating CVaR and bPOE for Common Probability Distributions With Application to Portfolio 
-                   Optimization and Density Estimation  Matthew Norton · Valentyn Khokhlov · Stan Uryasev
+        Computes CVaR belief CBF for a Multivariate Gaussian Random Variable Y
         '''
 
         mu, sigma = self.extract_mu_sigma(b)
 
         mu_mod = jnp.dot(self.alpha.T, mu) - self.beta
-        sigma_mod = jnp.sqrt(self.alpha.T @ sigma @ self.alpha) # sigma_mod is sd, whereas sigma is cov
+        sigma_mod = jnp.sqrt(self.alpha.T @ sigma @ self.alpha)  # sd
 
-        q_alpha = norm.ppf(self.delta) # delta quantile of standard normal distribution
+        q_alpha = ppf(self.delta)     # JAX-safe quantile
+        f = pdf(q_alpha)              # JAX-safe density
 
-        f = norm.pdf(q_alpha)
+        CVaR = mu_mod - (sigma_mod * f) / self.delta
 
-        CVaR = mu_mod - (sigma_mod*f)/self.delta # THIS IS FOR THE LOWER LEFT QUANTILE, DIFFERENT FROM bPOE SOURCE BUT CONSISTENT WITH BCBF
+        return CVaR.squeeze()
 
-        return CVaR.squeeze() # Convert from array to float
 
     # def h_b(self, b):
     #     """Computes h_b(b) given belief state b = [mu, vec_u(Sigma)]"""
@@ -352,6 +356,7 @@ class BeliefCBF:
         # Compute gradient automatically - nx1 matrix containing partials of h_b wrt all n elements in b
         grad_h_b = jax.grad(self.h_b, argnums=0)
 
+        @jax.jit
         def extract_sigma_vector(sigma_matrix):
             """
             Extract f or g sigma by vectorizing the upper triangular part of each (n x n) slice in the given matrix.
@@ -375,6 +380,7 @@ class BeliefCBF:
                 
                 return sigma_vector
 
+        @jax.jit
         def f_b(b):
             # Time update evaluated at mean
             f_vector = dynamics.f(b[:self.n]) 
@@ -390,6 +396,7 @@ class BeliefCBF:
             
             return f_b_vector
         
+        @jax.jit
         def g_b(b):
 
             def extract_g_sigma(G_sigma):
@@ -441,7 +448,9 @@ class BeliefCBF:
         Given a High-Order BCBF linear inequality constraint of relative
         degree 2: 
 
-            h_ddot >= [alpha1 alpha2].T [h_dot h]
+            h_ddot >= -[alpha1 alpha2].T [h_dot h]
+        =>  Lf^2h + LgLfh * u >= -[alpha1 alpha2].T [Lfh h]
+        =>  - LgLfh * u <= [alpha1 alpha2].T [Lfh h] + Lf^2h
 
                 where:
                     h_dot = LfH
@@ -450,7 +459,7 @@ class BeliefCBF:
         This function calculates the right-hand-side (RHS) of the following
         resulting QP linear inequality:
 
-            -LgLfh * u <= -[alpha1 alpha2].T [Lfh h] + Lf^2h
+            -LgLfh * u <= [alpha1 alpha2].T [Lfh h] + Lf^2h
 
         Args:
             b (jax.Array): belief vector
@@ -459,7 +468,7 @@ class BeliefCBF:
             float value: Value of RHS of the inequality above
         
         """        
-        roots = jnp.array([-0.75]) # Manually select root to be in left half plane
+        roots = jnp.array([-0.25]) # Manually select root to be in left half plane
         coeff = cbf_gain*jnp.poly(roots)
 
         # jax.debug.print("Value: {}", coeff)
